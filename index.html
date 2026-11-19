@@ -10,29 +10,55 @@
   <div class="moon" aria-hidden="true"></div>
 
   <main class="hero">
-    <p class="brand">WEREWOLF ONLINE</p>
-    <h1>狼人杀</h1>
-    <p class="tagline">约上朋友，开一局。</p>
+    <section id="homeView" class="view">
+      <p class="brand">WEREWOLF ONLINE</p>
+      <h1>狼人杀</h1>
+      <p class="tagline">约上朋友，开一局。</p>
 
-    <section class="panel">
-      <button id="createRoom" class="btn primary" type="button">创建房间</button>
+      <section class="panel">
+        <label class="field">
+          <span>你的昵称</span>
+          <input id="playerName" maxlength="12" placeholder="例如：夜行客" autocomplete="off">
+        </label>
 
-      <div class="divider"><span>或</span></div>
+        <button id="createRoom" class="btn primary" type="button">创建房间</button>
 
-      <form id="joinForm" class="join">
-        <input id="roomCode" maxlength="6" inputmode="numeric" placeholder="输入 6 位房间码"
-               autocomplete="off" aria-label="房间码">
-        <button class="btn" type="submit">加入</button>
-      </form>
+        <div class="divider"><span>或</span></div>
+
+        <form id="joinForm" class="join">
+          <input id="roomCode" maxlength="6" inputmode="numeric" placeholder="输入 6 位房间码"
+                 autocomplete="off" aria-label="房间码">
+          <button class="btn" type="submit">加入</button>
+        </form>
+      </section>
+
+      <p id="status" class="status">连接服务器中…</p>
     </section>
 
-    <p id="status" class="status">本地预览模式 · 尚未连接服务器</p>
+    <section id="roomView" class="view" hidden>
+      <p class="brand">ROOM</p>
+
+      <div class="room-code">
+        <span id="roomCodeLabel">------</span>
+        <button id="copyCode" class="btn small" type="button">复制房间码</button>
+      </div>
+
+      <section class="panel">
+        <h2 class="panel-title">玩家 <span id="playerCount">0</span> / 12</h2>
+        <ul id="playerList" class="players"></ul>
+      </section>
+
+      <p id="connStatus" class="status">连接中…</p>
+      <button id="leaveRoom" class="btn ghost" type="button">离开房间</button>
+    </section>
   </main>
 
-  <footer class="foot">v0.1 · 阶段 1：界面骨架</footer>
+  <footer class="foot">v0.2 · 阶段 2：在线房间</footer>
 
   <div id="toast" class="toast" role="status" hidden></div>
 
+  <script src="vendor/supabase.js"></script>
+  <script src="js/config.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
