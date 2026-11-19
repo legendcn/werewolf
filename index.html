@@ -4,14 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
-  <link rel="stylesheet" href="vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
+  <link rel="stylesheet" href="styles.css?v=0.4">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
     <div class="container">
-      <a class="navbar-brand font-weight-bold" href="./">狼人杀</a>
-      <span class="navbar-text small text-muted d-none d-sm-inline">在线版 · 好友开房</span>
+      <a class="navbar-brand" href="./">狼人杀</a>
+      <ul class="navbar-nav mr-auto flex-row">
+        <li class="nav-item"><a class="nav-link" href="#start">开始游戏</a></li>
+        <li class="nav-item"><a class="nav-link" href="#rules">规则</a></li>
+        <li class="nav-item d-none d-sm-block"><a class="nav-link" href="https://github.com/legendcn/werewolf">源码</a></li>
+      </ul>
+      <span class="navbar-text small text-muted d-none d-sm-inline">在线版</span>
     </div>
   </nav>
 
@@ -20,30 +25,46 @@
       <div class="sr-hero mb-4">
         <h1 class="h2 mb-2">狼人杀</h1>
         <p class="mb-3">好友组局 · <span class="sr-tag sr-tag-killer">6 位房间码</span> <span class="sr-tag sr-tag-police">实时同步</span> <span class="sr-tag sr-tag-civilian">无需注册</span></p>
+        <a class="btn btn-light btn-lg" href="#start" id="heroStart">开始游戏</a>
+      </div>
 
-        <div class="sr-start">
-          <input id="playerName" class="form-control" maxlength="12" placeholder="你的昵称" autocomplete="off">
-          <button id="createRoom" class="btn btn-light" type="button">创建房间</button>
+      <div class="card mb-4" id="start">
+        <div class="card-header"><strong>开始游戏</strong></div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="col-md-6 mb-3 mb-md-0">
+              <label class="small text-muted mb-1" for="playerName">昵称（最多 12 字）</label>
+              <div class="input-group">
+                <input id="playerName" class="form-control" maxlength="12" placeholder="你的昵称" autocomplete="off">
+                <div class="input-group-append">
+                  <button id="createRoom" class="btn btn-danger" type="button">创建房间</button>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="small text-muted mb-1" for="roomCode">已有房间码</label>
+              <form id="joinForm" class="input-group">
+                <input id="roomCode" class="form-control" maxlength="6" inputmode="numeric" placeholder="6 位房间码"
+                       autocomplete="off" aria-label="房间码">
+                <div class="input-group-append">
+                  <button class="btn btn-primary" type="submit">加入房间</button>
+                </div>
+              </form>
+            </div>
+          </div>
+          <p id="status" class="text-muted small mb-0 mt-3">连接服务器中…</p>
         </div>
-
-        <div class="sr-or">或 用房间码加入</div>
-
-        <form id="joinForm" class="sr-join">
-          <input id="roomCode" class="form-control" maxlength="6" inputmode="numeric" placeholder="6 位房间码"
-                 autocomplete="off" aria-label="房间码">
-          <button class="btn btn-outline-light" type="submit">加入</button>
-        </form>
       </div>
 
       <div class="row">
         <div class="col-lg-7">
-          <div class="card mb-4">
+          <div class="card mb-4" id="rules">
             <div class="card-header"><strong>怎么玩</strong></div>
             <div class="card-body sr-rules">
               <ol class="pl-3 mb-0">
                 <li>填昵称，点「创建房间」，把页面上的 6 位房间码发给朋友。</li>
-                <li>朋友打开同一个网址，输入房间码加入；玩家列表实时同步。</li>
-                <li>身份发牌、夜晚行动、发言与投票将在后续阶段上线。</li>
+                <li>朋友打开同一个网址，输入房间码加入；玩家会坐到 <strong>01–16</strong> 号座位上，<strong class="text-danger">先到者成为房主</strong>，成员变化 <strong class="text-primary">实时同步</strong>。</li>
+                <li>后续将上线：身份发牌、夜晚行动、轮流发言、投票放逐与胜负判定。</li>
               </ol>
             </div>
           </div>
@@ -51,18 +72,20 @@
         <div class="col-lg-5">
           <div class="card mb-4">
             <div class="card-header"><strong>房间须知</strong></div>
-            <div class="card-body sr-rules">
-              <ul class="pl-3 mb-0">
-                <li>每间房最多 16 人，先到者自动成为房主。</li>
-                <li>同一浏览器开多个标签会被当成同一个人，测试请用无痕窗口。</li>
-                <li>中国大陆网络访问服务器需要加速器。</li>
-              </ul>
+            <div class="table-responsive">
+              <table class="table table-sm mb-0">
+                <tbody>
+                  <tr><th scope="row">人数上限</th><td>16 人</td></tr>
+                  <tr><th scope="row">房间码</th><td>6 位数字</td></tr>
+                  <tr><th scope="row">房主</th><td>第一位加入者</td></tr>
+                  <tr><th scope="row">网络</th><td>大陆访问需加速器</td></tr>
+                  <tr><th scope="row">多标签</th><td>会被视为同一人，测试请用无痕窗口</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
       </div>
-
-      <p id="status" class="text-center text-muted small mb-4">连接服务器中…</p>
     </section>
 
     <section id="roomView" class="view" hidden>
@@ -96,13 +119,13 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.3 · 在线房间 · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.4 · 在线房间 · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/config.js?v=0.4"></script>
+  <script src="js/app.js?v=0.4"></script>
 </body>
 </html>

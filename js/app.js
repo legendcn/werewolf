@@ -299,6 +299,12 @@ els.leaveBtn.addEventListener('click', () => {
   leaveRoom().catch((error) => toast(friendlyError(error)));
 });
 
+document.querySelector('#heroStart').addEventListener('click', (event) => {
+  event.preventDefault();
+  document.querySelector('#start').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  els.nameInput.focus({ preventScroll: true });
+});
+
 els.codeInput.addEventListener('input', () => {
   els.codeInput.value = els.codeInput.value.replace(/\D/g, '').slice(0, 6);
 });

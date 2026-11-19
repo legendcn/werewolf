@@ -19,10 +19,9 @@ body {
 
 .sr-hero h1 {
   color: #fff;
-  letter-spacing: 0.06em;
 }
 
-.sr-hero p { color: rgba(255, 255, 255, 0.85); }
+.sr-hero p { color: rgba(255, 255, 255, 0.9); }
 
 .sr-tag {
   display: inline-block;
@@ -40,30 +39,13 @@ body {
 .sr-tag-police { background: #1d63c4; }
 .sr-tag-civilian { background: #5a6268; }
 
-.sr-start,
-.sr-join {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  max-width: 560px;
-}
-
-.sr-start .form-control { max-width: 280px; }
-
-.sr-or {
-  margin: 14px 0 8px;
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 90%;
-}
-
-.sr-join .form-control {
-  max-width: 200px;
+#roomCode {
   letter-spacing: 0.25em;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
-.sr-join .form-control::placeholder {
+#roomCode::placeholder {
   letter-spacing: 0.05em;
   text-align: left;
 }
@@ -231,8 +213,6 @@ body {
 
 @media (max-width: 575.98px) {
   .sr-hero { padding: 20px 16px; }
-  .sr-start .form-control,
-  .sr-join .form-control { max-width: 100%; flex: 1 1 140px; }
   .sr-seats { gap: 5px; }
   .sr-seat { padding: 6px 3px; }
   .sr-avatar { width: 36px; height: 36px; }
