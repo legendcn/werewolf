@@ -1,4 +1,4 @@
-const MAX_PLAYERS = 12;
+const MAX_PLAYERS = 16;
 const NAME_KEY = 'wolf.name';
 const SESSION_KEY = 'wolf.session';
 
@@ -49,8 +49,9 @@ function setStatus(text) {
   els.status.textContent = text;
 }
 
-function setConn(text) {
+function setConn(text, live = false) {
   els.connStatus.textContent = text;
+  els.connStatus.classList.toggle('sr-conn-live', live);
 }
 
 function setBusy(value) {
@@ -149,7 +150,7 @@ function subscribeRoom() {
       () => loadMembers()
     )
     .subscribe((status) => {
-      if (status === 'SUBSCRIBED') setConn('已连接 · 实时同步中');
+      if (status === 'SUBSCRIBED') setConn('已连接 · 实时同步中', true);
       else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         setConn('实时连接异常，可尝试退出重进');
       }
@@ -175,39 +176,52 @@ function renderPlayers(rows) {
   els.playerList.replaceChildren();
 
   if (rows.length === 0) {
-    const li = document.createElement('li');
-    li.className = 'empty';
-    li.textContent = '还没有玩家';
-    els.playerList.append(li);
+    const empty = document.createElement('li');
+    empty.className = 'sr-empty';
+    empty.textContent = '等待玩家加入…';
+    els.playerList.append(empty);
     return;
   }
 
   const hostId = rows[0].id;
   rows.forEach((row, index) => {
     const li = document.createElement('li');
+    li.className = 'sr-seat';
+    if (row.id === session.playerId) li.classList.add('sr-self');
 
-    const seat = document.createElement('span');
-    seat.className = 'seat';
-    seat.textContent = String(index + 1).padStart(2, '0');
+    const head = document.createElement('div');
+    head.className = 'sr-seat-head';
 
-    const name = document.createElement('span');
-    name.className = 'pname';
-    name.textContent = row.name;
-
-    li.append(seat, name);
+    const num = document.createElement('span');
+    num.className = 'sr-num';
+    num.textContent = String(index + 1).padStart(2, '0');
+    head.append(num);
 
     if (row.id === hostId) {
       const host = document.createElement('span');
-      host.className = 'badge host';
+      host.className = 'badge badge-warning';
       host.textContent = '房主';
-      li.append(host);
+      head.append(host);
     }
+
+    const avatar = document.createElement('div');
+    avatar.className = 'sr-avatar';
+    avatar.textContent = row.name.trim().charAt(0).toUpperCase();
+
+    const name = document.createElement('span');
+    name.className = 'sr-name';
+    name.textContent = row.name;
+
+    const marks = document.createElement('div');
+    marks.className = 'sr-marks';
     if (row.id === session.playerId) {
       const me = document.createElement('span');
-      me.className = 'badge me';
+      me.className = 'badge badge-primary';
       me.textContent = '我';
-      li.append(me);
+      marks.append(me);
     }
+
+    li.append(head, avatar, name, marks);
     els.playerList.append(li);
   });
 }
