@@ -385,16 +385,25 @@ function stopPolling() {
   }
 }
 
+let polling = false;
+
 async function pollOnce() {
-  if (!session || document.hidden) return;
-  pollTick += 1;
-  await loadRoom();
-  if (pollTick % 2 === 0) await loadMembers();
-  if (!g || g.phase === 'finished') return;
-  await loadMyRole();
-  if (g.phase !== 'night') await loadChat();
-  if (g.phase === 'night' && g.step === 'wolves' && myRow?.role && Rules.isWolfRole(myRow.role)) {
-    await loadWolfPicks();
+  if (!session || document.hidden || polling) return;
+  polling = true;
+  try {
+    pollTick += 1;
+    await loadRoom();
+    if (!session) return;
+    if (pollTick % 2 === 0) await loadMembers();
+    if (!g || g.phase === 'finished') return;
+    await loadMyRole();
+    if (!g) return;
+    if (g.phase !== 'night') await loadChat();
+    if (g.phase === 'night' && g.step === 'wolves' && myRow?.role && Rules.isWolfRole(myRow.role)) {
+      await loadWolfPicks();
+    }
+  } finally {
+    polling = false;
   }
 }
 
@@ -421,6 +430,18 @@ async function loadRoom() {
 
 function applyRoom(row) {
   if (!row) return;
+  // 房主正在判定时，轮询回来的旧快照不能覆盖本地的权威状态
+  if (isHost() && hostBusy) return;
+  const incomingG = row.options?.g || null;
+  if (g) {
+    if (incomingG) {
+      if ((incomingG.v || 0) < (g.v || 0)) return;
+    } else if (row.options?.phase === 'waiting') {
+      if (g.phase !== 'finished') return;
+    } else {
+      return;
+    }
+  }
   if (!feedSeeded) {
     const mode = modeById(row.options?.mode || 'std12');
     localFeed.push(`房间 ${session?.code} · ${mode.name}（${mode.roles.length} 人）`);
@@ -1738,6 +1759,7 @@ async function resolveHunter(actions) {
 
 async function saveGame() {
   if (!session || !room || !g) return;
+  g.v = (g.v || 0) + 1;
   const options = Object.assign({}, room.options || {}, {
     mode: g.mode,
     phase: g.phase === 'finished' ? 'finished' : 'playing',
