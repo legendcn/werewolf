@@ -7,6 +7,11 @@ body {
 
 .uoj-content { min-height: 250px; }
 
+.navbar-nav.flex-row .nav-link {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
 /* ---------- 顶部横幅（仿 QOJ 杀人游戏 sr-hero） ---------- */
 .sr-hero {
   padding: 28px 30px;
@@ -178,6 +183,81 @@ body {
   color: #6c757d;
 }
 
+.sr-seat.sr-seat-empty {
+  border-style: dashed;
+  border-color: #ced4da;
+  background: #fbfbfb;
+  color: #adb5bd;
+}
+
+.sr-seat.sr-seat-empty .sr-avatar {
+  background: #f1f3f5;
+  color: #adb5bd;
+}
+
+.sr-seat.sr-seat-empty .sr-name { color: #adb5bd; }
+
+.sr-seat.sr-dead {
+  opacity: 0.5;
+  filter: grayscale(0.9);
+}
+
+.sr-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.sr-prompt {
+  margin-top: 4px;
+  color: #6c757d;
+  font-size: 92%;
+}
+
+.sr-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- 身份条与身份牌（仿 sr-me） ---------- */
+.sr-me {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 2px solid #adb5bd;
+  background: #f8f9fa;
+}
+
+.sr-me-killer { border-color: #c82333; background: #fff1f2; }
+.sr-me-police { border-color: #1d63c4; background: #eef4ff; }
+
+.sr-rolecard { border: 2px solid #dee2e6; }
+.sr-rolecard-killer { border-color: #e4a0a7; }
+.sr-rolecard-police { border-color: #9dbbe6; }
+.sr-rolecard .sr-tag { font-size: 100%; }
+
+.sr-me[hidden], .sr-rolecard[hidden] { display: none; }
+
+/* ---------- 房间动态 ---------- */
+.sr-feed {
+  height: 300px;
+  overflow-y: auto;
+  font-size: 92%;
+}
+
+.sr-sys {
+  margin: 6px 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f1f3f5;
+  color: #495057;
+}
+
 .sr-rules li + li { margin-top: 0.35rem; }
 
 /* ---------- 页脚 ---------- */
@@ -217,4 +297,6 @@ body {
   .sr-seat { padding: 6px 3px; }
   .sr-avatar { width: 36px; height: 36px; }
   .sr-name { font-size: 78%; }
+  .sr-feed { height: 220px; }
+  .sr-seat .badge { font-size: 68%; }
 }

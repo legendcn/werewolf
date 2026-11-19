@@ -17,6 +17,11 @@ create table if not exists public.players (
 
 create index if not exists players_room_code_idx on public.players (room_code);
 
+-- 阶段3：发牌相关列
+alter table public.players add column if not exists seat int;
+alter table public.players add column if not exists role text;
+alter table public.players add column if not exists alive boolean not null default true;
+
 alter table public.rooms enable row level security;
 alter table public.players enable row level security;
 
@@ -31,8 +36,18 @@ create policy "rooms creatable" on public.rooms for insert with check (true);
 create policy "players readable" on public.players for select using (true);
 create policy "players insertable" on public.players for insert with check (true);
 create policy "players deletable" on public.players for delete using (true);
+drop policy if exists "players updatable" on public.players;
+create policy "players updatable" on public.players for update using (true) with check (true);
+drop policy if exists "rooms updatable" on public.rooms;
+create policy "rooms updatable" on public.rooms for update using (true) with check (true);
 
-grant select, insert on public.rooms to anon;
-grant select, insert, delete on public.players to anon;
+grant select, insert, update on public.rooms to anon;
+grant select, insert, update, delete on public.players to anon;
 
 alter publication supabase_realtime add table public.players;
+do $$
+begin
+  alter publication supabase_realtime add table public.rooms;
+exception
+  when duplicate_object then null;
+end $$;
