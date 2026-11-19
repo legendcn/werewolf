@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.5">
+  <link rel="stylesheet" href="styles.css?v=0.6">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -24,7 +24,7 @@
     <section id="homeView" class="view">
       <div class="sr-hero mb-4">
         <h1 class="h2 mb-2">狼人杀</h1>
-        <p class="mb-3">好友组局 · <span class="sr-tag sr-tag-killer">6 种板子</span> <span class="sr-tag sr-tag-police">实时同步</span> <span class="sr-tag sr-tag-civilian">身份牌与技能</span></p>
+        <p class="mb-3">好友组局 · <span class="sr-tag sr-tag-killer">8 种板子</span> <span class="sr-tag sr-tag-police">夜晚行动</span> <span class="sr-tag sr-tag-neutral">第三方阵营</span></p>
         <a class="btn btn-light btn-lg" href="#start" id="heroStart">开始游戏</a>
       </div>
 
@@ -66,10 +66,10 @@
             <div class="card-header"><strong>怎么玩</strong></div>
             <div class="card-body sr-rules">
               <ol class="pl-3 mb-0">
-                <li>选一个板子、填昵称，点「创建房间」，把页面上的 6 位房间码发给朋友。</li>
-                <li>朋友打开同一个网址，输入房间码加入。每种板子有固定人数，<strong>满员后房主点「开始游戏」</strong>，系统随机入座、随机发牌。</li>
-                <li>发牌后每个人面前会出现「<strong>查看我的身份牌</strong>」，里面有你的角色、阵营和技能，注意别给旁边的人看到。</li>
-                <li>下个版本开放：夜晚行动、白天轮流发言、投票放逐与胜负判定。</li>
+                <li>选板子、填昵称，点「创建房间」，把 6 位房间码发给朋友；每种板子人数固定，<strong>满员后房主开牌</strong>。</li>
+                <li>夜晚按顺序行动：盗贼换牌 → 丘比特连情侣 → 守卫守护 → 狼人刀人 → 狼美人魅惑 → 女巫用药 → 预言家查验。</li>
+                <li>天亮公布出局玩家（不翻身份），存活玩家讨论后同时投票；平票进入 PK，再平票则无人出局。</li>
+                <li>胜负按<strong>屠边</strong>：好人放逐所有狼人获胜；狼人杀光全部神职或全部平民获胜；人狼情侣组成第三方，需活到最后。</li>
               </ol>
             </div>
           </div>
@@ -80,9 +80,9 @@
             <div class="table-responsive">
               <table class="table table-sm mb-0">
                 <tbody>
-                  <tr><th scope="row">板子人数</th><td>6 / 9 / 12 / 16 人</td></tr>
+                  <tr><th scope="row">板子人数</th><td>6 / 9 / 12 人</td></tr>
                   <tr><th scope="row">房间码</th><td>6 位数字</td></tr>
-                  <tr><th scope="row">房主</th><td>第一位加入者</td></tr>
+                  <tr><th scope="row">房主</th><td>第一位加入者，负责开牌和判定的引擎</td></tr>
                   <tr><th scope="row">网络</th><td>大陆访问需加速器</td></tr>
                   <tr><th scope="row">多标签</th><td>会被视为同一人，测试请用无痕窗口</td></tr>
                 </tbody>
@@ -102,9 +102,10 @@
         </div>
       </div>
 
-      <div class="sr-status mb-3">
+      <div class="sr-status mb-3" id="statusBar">
         <div class="sr-status-main">
           <span class="sr-phase" id="phaseLabel">载入中…</span>
+          <span class="sr-clock" id="gameClock"></span>
           <span class="sr-clock" id="seatCount">–</span>
         </div>
         <div class="sr-prompt" id="statusPrompt"></div>
@@ -124,6 +125,7 @@
             <span id="roleCamp" class="text-muted small ml-auto">—</span>
           </div>
           <p id="roleSkill" class="mb-0">—</p>
+          <p id="roleExtra" class="small text-danger mb-0 mt-2" hidden></p>
         </div>
       </div>
 
@@ -139,14 +141,45 @@
             </div>
           </div>
           <div class="sr-action mt-3" id="actionArea"></div>
+
+          <div class="card mt-3 sr-overcard" id="gameOverCard" hidden>
+            <div class="card-header"><strong>对局结束</strong></div>
+            <div class="card-body">
+              <div id="winnerText" class="sr-winner"></div>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm mb-0">
+                  <thead>
+                    <tr><th>座位</th><th>玩家</th><th>身份</th><th>结果</th></tr>
+                  </thead>
+                  <tbody id="revealBody"></tbody>
+                </table>
+              </div>
+              <button id="replayBtn" class="btn btn-danger mt-3" type="button" hidden>再来一局（房主）</button>
+            </div>
+          </div>
         </div>
         <div class="col-lg-5 mb-3">
           <div class="card mb-3">
             <div class="card-header d-flex justify-content-between align-items-center">
-              <strong>房间动态</strong>
+              <strong>对局记录</strong>
               <span id="connStatus" class="sr-conn">连接中…</span>
             </div>
             <div class="card-body p-2 sr-feed" id="feed"></div>
+          </div>
+          <div class="card mb-3" id="chatCard" hidden>
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>白天发言</strong>
+              <small class="text-muted" id="chatNote"></small>
+            </div>
+            <div class="card-body p-2">
+              <div class="sr-feed sr-chat-feed" id="chatFeed"></div>
+              <form id="chatForm" class="input-group input-group-sm mt-2" autocomplete="off">
+                <input id="chatInput" class="form-control" maxlength="200" placeholder="输入发言（回车发送）">
+                <div class="input-group-append">
+                  <button class="btn btn-primary" type="submit">发送</button>
+                </div>
+              </form>
+            </div>
           </div>
           <div class="card mb-3">
             <div class="card-header"><strong>本局板子</strong></div>
@@ -158,14 +191,15 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.5 · 板子与身份牌 · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.6 · 完整对局（夜晚/白天/投票） · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.5"></script>
-  <script src="js/modes.js?v=0.5"></script>
-  <script src="js/app.js?v=0.5"></script>
+  <script src="js/config.js?v=0.6"></script>
+  <script src="js/modes.js?v=0.6"></script>
+  <script src="js/rules.js?v=0.6"></script>
+  <script src="js/app.js?v=0.6"></script>
 </body>
 </html>

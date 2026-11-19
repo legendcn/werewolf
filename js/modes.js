@@ -6,11 +6,15 @@
     },
     wolfking: {
       name: '白狼王', camp: 'killer', campName: '狼人阵营',
-      skill: '狼人阵营。白天可以自爆，公开身份并带走一名玩家，然后立即进入黑夜。',
+      skill: '狼人阵营。白天可自爆并带走一名玩家，立即进入黑夜。',
+    },
+    wolfbeauty: {
+      name: '狼美人', camp: 'killer', campName: '狼人阵营',
+      skill: '每晚参与袭击后可魅惑一名玩家；你出局时被魅惑者殉情（被骑士决斗除外）。不能连续两晚魅惑同一人。',
     },
     seer: {
       name: '预言家', camp: 'police', campName: '好人阵营 · 神职',
-      skill: '每晚可以查验一名玩家，法官会告诉你他是好人还是狼人。',
+      skill: '每晚可以查验一名玩家，得知他是好人还是狼人。',
     },
     witch: {
       name: '女巫', camp: 'police', campName: '好人阵营 · 神职',
@@ -22,23 +26,27 @@
     },
     guard: {
       name: '守卫', camp: 'police', campName: '好人阵营 · 神职',
-      skill: '每晚守护一名玩家，被守护者当晚不会被狼人杀害；不能连续两晚守同一个人。',
+      skill: '每晚守护一名玩家，被守护者当晚不会被狼刀；不能连续两晚守同一人。与女巫同时救守同一人时该玩家仍会出局（同守同救）。',
     },
     idiot: {
       name: '白痴', camp: 'police', campName: '好人阵营 · 神职',
-      skill: '被投票出局时翻牌亮明身份，免于出局，但之后失去投票权，仍可能被狼人刀死。',
+      skill: '被投票放逐时翻牌免死，之后失去投票权，但仍可能被狼人刀死。',
+    },
+    knight: {
+      name: '骑士', camp: 'police', campName: '好人阵营 · 神职',
+      skill: '白天投票前可翻牌与一名玩家决斗：对方是狼人则立即出局并进入黑夜；对方是好人则你出局。',
     },
     villager: {
       name: '平民', camp: 'civilian', campName: '好人阵营 · 平民',
       skill: '没有技能。靠听发言、分析逻辑和投票，帮助好人找出狼人。',
     },
-    killer: {
-      name: '杀手', camp: 'killer', campName: '杀手阵营',
-      skill: '与杀手同伴互相知道身份，每晚共同刀掉一名玩家；白天隐藏身份。',
+    cupid: {
+      name: '丘比特', camp: 'neutral', campName: '特殊 · 爱神',
+      skill: '第一晚选择两名玩家成为情侣（可包括自己）。若情侣分属狼人和好人，你和情侣成为第三方，目标是让其他所有人出局。',
     },
-    police: {
-      name: '警察', camp: 'police', campName: '好人阵营 · 警察',
-      skill: '与警察同伴互相知道身份，每晚共同查验一名玩家，得知其是不是杀手。',
+    thief: {
+      name: '盗贼', camp: 'neutral', campName: '特殊 · 变动阵营',
+      skill: '第一晚从两张底牌中选一张作为自己的身份，可能因此加入狼人阵营。',
     },
   };
 
@@ -58,7 +66,7 @@
     {
       id: 'std12',
       name: '12人标准局（预女猎守）',
-      desc: '最流行的 12 人竞技板子：4 狼 4 民，预言家/女巫/猎人/守卫四神。',
+      desc: '最流行的 12 人竞技板子：4 狼 4 民，预言家/女巫/猎人/守卫四神，屠边局。',
       roles: ['werewolf', 'werewolf', 'werewolf', 'werewolf',
         'villager', 'villager', 'villager', 'villager',
         'seer', 'witch', 'hunter', 'guard'],
@@ -80,13 +88,28 @@
         'seer', 'witch', 'hunter', 'idiot'],
     },
     {
-      id: 'qoj16',
-      name: '16人·QOJ杀手警察局',
-      desc: 'QOJ 同款：4 杀手 4 警察 8 平民。杀手互认，警察互认，警察每晚共同验人。',
-      roles: ['killer', 'killer', 'killer', 'killer',
-        'police', 'police', 'police', 'police',
+      id: 'wmq12',
+      name: '12人狼美人骑士局',
+      desc: '官方版型：狼美人 + 3 狼 4 民，预言家/女巫/守卫/骑士四神，屠边暗牌。',
+      roles: ['werewolf', 'werewolf', 'werewolf', 'wolfbeauty',
         'villager', 'villager', 'villager', 'villager',
-        'villager', 'villager', 'villager', 'villager'],
+        'seer', 'witch', 'guard', 'knight'],
+    },
+    {
+      id: 'qbt12',
+      name: '12人丘比特局',
+      desc: '爱神局：4 狼 4 民 + 预言家、女巫、猎人、丘比特。人狼情侣会组成第三方。',
+      roles: ['werewolf', 'werewolf', 'werewolf', 'werewolf',
+        'villager', 'villager', 'villager', 'villager',
+        'seer', 'witch', 'hunter', 'cupid'],
+    },
+    {
+      id: 'dz12',
+      name: '12人盗贼局',
+      desc: '换牌局：4 狼 4 民 + 预言家、女巫、猎人、盗贼。盗贼从两张底牌里选身份，可能变狼。',
+      roles: ['werewolf', 'werewolf', 'werewolf', 'werewolf',
+        'villager', 'villager', 'villager', 'villager',
+        'seer', 'witch', 'hunter', 'thief'],
     },
   ];
 
@@ -94,6 +117,7 @@
     killer: { tag: 'sr-tag-killer', bar: 'sr-me-killer', name: '狼人阵营' },
     police: { tag: 'sr-tag-police', bar: 'sr-me-police', name: '好人阵营 · 神职' },
     civilian: { tag: 'sr-tag-civilian', bar: '', name: '好人阵营 · 平民' },
+    neutral: { tag: 'sr-tag-neutral', bar: 'sr-me-neutral', name: '特殊角色' },
   };
 
   function modeById(id) {
