@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.6.1">
+  <link rel="stylesheet" href="styles.css?v=0.7.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -24,7 +24,7 @@
     <section id="homeView" class="view">
       <div class="sr-hero mb-4">
         <h1 class="h2 mb-2">狼人杀</h1>
-        <p class="mb-3">好友组局 · <span class="sr-tag sr-tag-killer">8 种板子</span> <span class="sr-tag sr-tag-police">夜晚行动</span> <span class="sr-tag sr-tag-neutral">第三方阵营</span></p>
+        <p class="mb-3">好友组局 · <span class="sr-tag sr-tag-killer">8 种板子</span> <span class="sr-tag sr-tag-police">夜晚行动</span> <span class="sr-tag sr-tag-neutral">第三方阵营</span> <span class="sr-tag sr-tag-civilian">Elo 评分</span></p>
         <a class="btn btn-light btn-lg" href="#start" id="heroStart">开始游戏</a>
       </div>
 
@@ -66,10 +66,11 @@
             <div class="card-header"><strong>怎么玩</strong></div>
             <div class="card-body sr-rules">
               <ol class="pl-3 mb-0">
-                <li>选板子、填昵称，点「创建房间」，把 6 位房间码发给朋友；每种板子人数固定，<strong>满员后房主开牌</strong>。</li>
-                <li>夜晚按顺序行动：盗贼换牌 → 丘比特连情侣 → 守卫守护 → 狼人刀人 → 狼美人魅惑 → 女巫用药 → 预言家查验。</li>
-                <li>天亮公布出局玩家（不翻身份），存活玩家讨论后同时投票；平票进入 PK，再平票则无人出局。</li>
+                <li>选板子、填昵称，点「创建房间」，把 6 位房间码发给朋友；每种板子人数固定，<strong>满员后房主开牌</strong>。昵称同时是你的评分账号，同一房间内不能重名。</li>
+                <li>夜晚按顺序行动：盗贼换牌 → 丘比特连情侣 → 守卫守护 → 狼人刀人 → 狼美人魅惑 → 女巫用药 → 预言家查验；<strong>狼人夜里可在「狼人频道」私聊</strong>。</li>
+                <li>天亮公布出局玩家（不翻身份），存活玩家按<strong>固定顺序</strong>每人 20 秒发言，全部说完后同时投票；平票进入 PK，再平票则无人出局。</li>
                 <li>胜负按<strong>屠边</strong>：好人放逐所有狼人获胜；狼人杀光全部神职或全部平民获胜；人狼情侣组成第三方，需活到最后。</li>
+                <li><strong>评分</strong>：团队 Elo，初始 1500，按对手平均分计算期望胜率，同队同输赢，零和结算；6 / 9 / 12 人局 K 值分别为 32 / 28 / 24。</li>
               </ol>
             </div>
           </div>
@@ -83,6 +84,7 @@
                   <tr><th scope="row">板子人数</th><td>6 / 9 / 12 人</td></tr>
                   <tr><th scope="row">房间码</th><td>6 位数字</td></tr>
                   <tr><th scope="row">房主</th><td>第一位加入者，负责开牌和判定的引擎</td></tr>
+                  <tr><th scope="row">评分</th><td>按昵称永久保存，初始 1500</td></tr>
                   <tr><th scope="row">网络</th><td>大陆访问需加速器</td></tr>
                   <tr><th scope="row">多标签</th><td>会被视为同一人，测试请用无痕窗口</td></tr>
                 </tbody>
@@ -146,10 +148,11 @@
             <div class="card-header"><strong>对局结束</strong></div>
             <div class="card-body">
               <div id="winnerText" class="sr-winner"></div>
+              <div id="resultNote" class="small text-muted mt-1"></div>
               <div class="table-responsive mt-2">
                 <table class="table table-sm mb-0">
                   <thead>
-                    <tr><th>座位</th><th>玩家</th><th>身份</th><th>结果</th></tr>
+                    <tr><th>座位</th><th>玩家</th><th>身份</th><th>结果</th><th>出局</th><th>被投</th><th>评分</th></tr>
                   </thead>
                   <tbody id="revealBody"></tbody>
                 </table>
@@ -168,7 +171,7 @@
           </div>
           <div class="card mb-3" id="chatCard" hidden>
             <div class="card-header d-flex justify-content-between align-items-center">
-              <strong>白天发言</strong>
+              <strong id="chatTitle">白天发言</strong>
               <small class="text-muted" id="chatNote"></small>
             </div>
             <div class="card-body p-2">
@@ -176,6 +179,7 @@
               <form id="chatForm" class="input-group input-group-sm mt-2" autocomplete="off">
                 <input id="chatInput" class="form-control" maxlength="200" placeholder="输入发言（回车发送）">
                 <div class="input-group-append">
+                  <button id="endSpeech" class="btn btn-outline-secondary" type="button" hidden>结束发言</button>
                   <button class="btn btn-primary" type="submit">发送</button>
                 </div>
               </form>
@@ -191,15 +195,15 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.6.1 · 完整对局（夜晚/白天/投票） · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.7.0 · 狼人夜聊 / 顺序发言 / 评分结算 · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.6.1"></script>
-  <script src="js/modes.js?v=0.6.1"></script>
-  <script src="js/rules.js?v=0.6.1"></script>
-  <script src="js/app.js?v=0.6.1"></script>
+  <script src="js/config.js?v=0.7.0"></script>
+  <script src="js/modes.js?v=0.7.0"></script>
+  <script src="js/rules.js?v=0.7.0"></script>
+  <script src="js/app.js?v=0.7.0"></script>
 </body>
 </html>

@@ -328,6 +328,12 @@ body {
 
 .sr-role-tagcell .sr-tag { font-size: 78%; }
 
+.sr-rate { font-size: 72%; color: #6c757d; font-variant-numeric: tabular-nums; }
+.sr-win { color: #1e7e34; font-weight: 600; }
+.sr-lose { color: #a71d2a; }
+.sr-delta-up { color: #1e7e34; font-weight: 600; }
+.sr-delta-down { color: #a71d2a; font-weight: 600; }
+
 .sr-rules li + li { margin-top: 0.35rem; }
 
 /* ---------- 页脚 ---------- */

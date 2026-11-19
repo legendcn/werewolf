@@ -12,7 +12,7 @@ const DUR = {
   witch: 20000,
   seer: 20000,
   dawn: 6000,
-  day: 90000,
+  speech: 20000,
   vote: 30000,
   runoff: 25000,
   hunter: 20000,
@@ -42,6 +42,17 @@ const REASON_LABEL = {
   lover: '（殉情）',
   charm: '（被狼美人带走）',
   explode: '（被白狼王自爆带走）',
+};
+
+const DEATH_SHORT = {
+  wolf: '被狼刀',
+  poison: '被毒杀',
+  vote: '被放逐',
+  hunter: '被猎人带走',
+  duel: '决斗出局',
+  lover: '殉情',
+  charm: '被狼美人带走',
+  explode: '自爆带走',
 };
 
 const els = {
@@ -77,13 +88,16 @@ const els = {
   actionArea: document.querySelector('#actionArea'),
   feed: document.querySelector('#feed'),
   chatCard: document.querySelector('#chatCard'),
+  chatTitle: document.querySelector('#chatTitle'),
   chatFeed: document.querySelector('#chatFeed'),
   chatForm: document.querySelector('#chatForm'),
   chatInput: document.querySelector('#chatInput'),
   chatNote: document.querySelector('#chatNote'),
+  endSpeechBtn: document.querySelector('#endSpeech'),
   modeInfo: document.querySelector('#modeInfo'),
   gameOverCard: document.querySelector('#gameOverCard'),
   winnerText: document.querySelector('#winnerText'),
+  resultNote: document.querySelector('#resultNote'),
   revealBody: document.querySelector('#revealBody'),
   replayBtn: document.querySelector('#replayBtn'),
   leaveBtn: document.querySelector('#leaveRoom'),
@@ -116,6 +130,9 @@ let hostTimer = null;
 let hostBusy = false;
 let wolfPicks = [];
 let chatRows = [];
+let wolfChatRows = [];
+let ratings = new Map();
+let ratingsKey = '';
 let submitted = new Set();
 let pick = null;
 let phaseKey = '';
@@ -196,6 +213,15 @@ function aliveSet() {
 function isAliveSeat(seat) {
   if (seat == null) return false;
   return aliveSet().has(seat);
+}
+
+function currentSpeaker() {
+  if (!g || g.phase !== 'day' || !g.speechOrder) return null;
+  return g.speechOrder[g.speechIndex] ?? null;
+}
+
+function isMyWolf() {
+  return Boolean(myRow?.role && Rules.isWolfRole(myRow.role));
 }
 
 function roleSeat(role) {
@@ -287,6 +313,14 @@ async function joinRoom(name, code) {
     throw new Error(`房间已满（${mode.name}固定 ${mode.roles.length} 人）`);
   }
 
+  const { count: sameName, error: sameError } = await client
+    .from('players')
+    .select('*', { count: 'exact', head: true })
+    .eq('room_code', code)
+    .eq('name', name);
+  if (sameError) throw sameError;
+  if ((sameName || 0) > 0) throw new Error('房间里已有同名玩家，换个昵称再进');
+
   const { data: player, error: playerError } = await client
     .from('players')
     .insert({ room_code: code, name })
@@ -310,6 +344,9 @@ function enterRoom(nextSession) {
   roleShown = false;
   localFeed = [];
   chatRows = [];
+  wolfChatRows = [];
+  ratings = new Map();
+  ratingsKey = '';
   submitted = new Set();
   pick = null;
   phaseKey = '';
@@ -398,7 +435,7 @@ async function pollOnce() {
     if (!g || g.phase === 'finished') return;
     await loadMyRole();
     if (!g) return;
-    if (g.phase !== 'night') await loadChat();
+    await loadChat();
     if (g.phase === 'night' && g.step === 'wolves' && myRow?.role && Rules.isWolfRole(myRow.role)) {
       await loadWolfPicks();
     }
@@ -494,6 +531,29 @@ async function loadMembers() {
   if (error || !session) return;
   members = data || [];
   renderRoom();
+  const namesKey = [...new Set(members.map((m) => m.name))].sort().join('|');
+  if (namesKey && namesKey !== ratingsKey) {
+    loadRatings().then(() => { if (session) renderRoom(); });
+  }
+}
+
+async function loadRatings() {
+  if (!session || !members.length) return;
+  const names = [...new Set(members.map((m) => m.name))];
+  const key = names.slice().sort().join('|');
+  const { data, error } = await client
+    .from('ratings')
+    .select('name, rating')
+    .in('name', names);
+  if (!session) return;
+  if (error) {
+    ratings = new Map(names.map((name) => [name, 1500]));
+    ratingsKey = key;
+    return;
+  }
+  ratings = new Map(names.map((name) => [name, 1500]));
+  (data || []).forEach((row) => ratings.set(row.name, row.rating));
+  ratingsKey = key;
 }
 
 async function loadMyRole() {
@@ -534,6 +594,25 @@ async function loadAllRoles() {
 
 async function loadChat() {
   if (!session || !g) return;
+  if (g.phase === 'night') {
+    if (!isMyWolf()) {
+      wolfChatRows = [];
+      renderChat();
+      return;
+    }
+    const { data, error } = await client
+      .from('game_actions')
+      .select('player_id, payload, created_at, day')
+      .eq('room_code', session.code)
+      .eq('day', g.day)
+      .eq('step', 'wolfchat')
+      .order('created_at', { ascending: true })
+      .limit(120);
+    if (error || !g) return;
+    wolfChatRows = data || [];
+    renderChat();
+    return;
+  }
   const { data, error } = await client
     .from('game_actions')
     .select('player_id, payload, created_at, day')
@@ -541,7 +620,7 @@ async function loadChat() {
     .eq('step', 'chat')
     .order('created_at', { ascending: true })
     .limit(120);
-  if (error) return;
+  if (error || !g) return;
   chatRows = data || [];
   renderChat();
 }
@@ -601,8 +680,9 @@ function renderFeed() {
 }
 
 function renderChat() {
+  const rows = g?.phase === 'night' ? wolfChatRows : chatRows;
   const frag = document.createDocumentFragment();
-  chatRows.forEach((row) => {
+  rows.forEach((row) => {
     const wrap = document.createElement('div');
     wrap.className = 'sr-chat-msg';
     const who = document.createElement('span');
@@ -623,7 +703,7 @@ function renderRoom() {
   const total = mode.roles.length;
   const inGame = Boolean(g);
 
-  els.chatCard.hidden = !inGame;
+  els.chatCard.hidden = !inGame || (g.phase === 'night' && !isMyWolf());
   if (inGame) {
     els.seatCount.textContent = `${g.aliveSeats.length} / ${total} 存活`;
   } else {
@@ -682,7 +762,15 @@ function renderStatusPrompt(mode, inGame) {
   if (g.phase === 'night') {
     els.statusPrompt.textContent = '夜晚行动中：按顺序行动，选择目标后确认；超时未选视为放弃。';
   } else if (g.phase === 'day') {
-    els.statusPrompt.textContent = '白天讨论：存活玩家在右侧发言，讨论结束后同时投票。';
+    const order = g.speechOrder || [];
+    const speaker = currentSpeaker();
+    if (speaker == null) {
+      els.statusPrompt.textContent = '发言结束，马上进入投票…';
+    } else {
+      const position = `第 ${g.speechIndex + 1} / ${order.length} 位`;
+      const list = order.map(pad).join(' → ');
+      els.statusPrompt.textContent = `${order.length > 1 ? `发言顺序：${list}。` : ''}当前 ${pad(speaker)} 号（${position}）${speaker === myRow?.seat ? '，轮到你发言，可连发多条，说完点「结束发言」' : '，等待发言'}。`;
+    }
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.statusPrompt.textContent = '投票：点击座位选择目标，不能投自己，也可以弃权。';
   } else if (g.phase === 'hunter') {
@@ -740,6 +828,15 @@ function renderSeats(mode, inGame) {
     } else {
       if (member.id === session.playerId) li.classList.add('sr-self');
       if (inGame && alive && !alive.has(seat)) li.classList.add('sr-dead');
+      if (inGame && currentSpeaker() === seat) li.classList.add('sr-speaking');
+
+      const rate = ratings.get(member.name);
+      if (rate) {
+        const rateTag = document.createElement('span');
+        rateTag.className = 'sr-rate';
+        rateTag.textContent = rate;
+        marks.append(rateTag);
+      }
 
       if (member.id === hostId) {
         const host = document.createElement('span');
@@ -1029,7 +1126,10 @@ function renderDayPanel(seat, role) {
     }
   }
   if (!els.actionArea.childElementCount) {
-    els.actionArea.append(note('白天讨论中：在右侧发言框发言；讨论结束后自动进入投票。'));
+    const speaker = currentSpeaker();
+    els.actionArea.append(note(speaker === seat
+      ? '轮到你发言：在右侧输入，可连发多条，说完点「结束发言」。'
+      : `按固定顺序发言，等待 ${speaker != null ? `${pad(speaker)} 号` : '下一位'}。`));
   }
 }
 
@@ -1161,11 +1261,16 @@ function renderGameOver() {
   const label = winner === 'wolf' ? '狼人阵营获胜' : winner === 'lovers' ? '第三方阵营获胜' : '好人阵营获胜';
   els.winnerText.className = `sr-winner ${winner === 'wolf' ? 'sr-winner-wolf' : winner === 'lovers' ? 'sr-winner-lovers' : ''}`.trim();
   els.winnerText.textContent = `${label} · ${g.winReason || ''}`;
+  els.resultNote.textContent = g.rating
+    ? `共 ${g.day} 天 · 评分 K=${g.rating.k} · 按昵称永久保存，零和结算`
+    : `共 ${g.day} 天 · 评分未结算（房主需运行 supabase/migration-v4.sql）`;
 
+  const detail = new Map((g.rating?.players || []).map((item) => [item.seat, item]));
   const rows = (allRoles.length ? allRoles : members).slice();
   rows.sort((a, b) => (a.seat || 99) - (b.seat || 99));
   const frag = document.createDocumentFragment();
   rows.forEach((row) => {
+    const item = detail.get(row.seat);
     const tr = document.createElement('tr');
     const seatTd = document.createElement('td');
     seatTd.textContent = row.seat ? pad(row.seat) : '—';
@@ -1182,22 +1287,88 @@ function renderGameOver() {
     } else {
       roleTd.textContent = '—';
     }
+
+    const lastDeath = (g.deaths || []).filter((death) => death.seat === row.seat).slice(-1)[0];
+    const death = item?.death || lastDeath || null;
+    const win = item ? item.win : null;
     const resultTd = document.createElement('td');
-    resultTd.textContent = row.alive ? '存活' : '出局';
-    tr.append(seatTd, nameTd, roleTd, resultTd);
+    if (win == null) {
+      resultTd.textContent = '—';
+      resultTd.className = 'text-muted';
+    } else {
+      const tag = document.createElement('span');
+      tag.className = win ? 'sr-win' : 'sr-lose';
+      tag.textContent = win ? '胜利' : '失败';
+      resultTd.append(tag);
+    }
+
+    const deathTd = document.createElement('td');
+    deathTd.className = 'text-muted';
+    deathTd.textContent = death
+      ? `第 ${death.day} 天 ${DEATH_SHORT[death.reason] || ''}`.trim()
+      : '存活到最后';
+
+    const votesTd = document.createElement('td');
+    votesTd.textContent = item
+      ? item.votesReceived
+      : (g.voteHistory || []).reduce((sum, vote) => sum + (vote.counts?.[row.seat] || 0), 0);
+
+    const ratingTd = document.createElement('td');
+    const current = ratings.get(row.name);
+    if (item) {
+      ratingTd.className = item.delta >= 0 ? 'sr-delta-up' : 'sr-delta-down';
+      ratingTd.textContent = `${item.before} → ${item.after}（${item.delta >= 0 ? '+' : ''}${item.delta}）`;
+    } else {
+      ratingTd.textContent = current ? `${current}（本局未结算）` : '—';
+    }
+
+    tr.append(seatTd, nameTd, roleTd, resultTd, deathTd, votesTd, ratingTd);
     frag.append(tr);
   });
   els.revealBody.replaceChildren(frag);
 }
 
 function updateChatForm() {
-  const canChat = Boolean(g) && g.phase === 'day' && isAliveSeat(myRow?.seat);
+  const alive = isAliveSeat(myRow?.seat);
+  const speaker = currentSpeaker();
+  const wolfNight = Boolean(g) && g.phase === 'night' && isMyWolf() && alive;
+  const speechDone = Boolean(g) && submitted.has(`${g.day}:speech`);
+  const myTurn = Boolean(g) && g.phase === 'day' && alive && speaker === myRow?.seat && !speechDone;
+  const canChat = wolfNight || myTurn;
+
   els.chatInput.disabled = !canChat;
-  els.chatForm.querySelector('button').disabled = !canChat;
-  els.chatNote.textContent = !g ? ''
-    : g.phase === 'day'
-      ? (canChat ? '只有存活玩家能发言' : '你已出局，只能旁观')
-      : '讨论阶段才能发言';
+  els.chatForm.querySelector('button[type="submit"]').disabled = !canChat;
+  els.endSpeechBtn.hidden = !myTurn;
+  els.endSpeechBtn.disabled = speechDone;
+
+  if (!g) {
+    els.chatTitle.textContent = '白天发言';
+    els.chatNote.textContent = '';
+    return;
+  }
+  if (g.phase === 'night') {
+    els.chatTitle.textContent = '狼人夜间频道';
+    els.chatNote.textContent = isMyWolf()
+      ? (alive ? '仅狼人可见 · 可随时交流' : '仅狼人可见 · 你已出局')
+      : '夜晚不能发言';
+    return;
+  }
+  els.chatTitle.textContent = '白天发言';
+  if (g.phase === 'finished') {
+    els.chatNote.textContent = '对局已结束';
+  } else if (g.phase === 'day') {
+    if (!alive) els.chatNote.textContent = '你已出局，只能旁观';
+    else if (myTurn) els.chatNote.textContent = `轮到你（第 ${g.speechIndex + 1} / ${g.speechOrder?.length || 0} 位）`;
+    else if (speaker === myRow?.seat) els.chatNote.textContent = '已结束发言，等待下一位';
+    else if (speaker != null) els.chatNote.textContent = `等待 ${pad(speaker)} 号发言`;
+    else els.chatNote.textContent = '发言结束，准备投票';
+  } else if (g.phase === 'vote' || g.phase === 'runoff') {
+    els.chatNote.textContent = '投票中不能发言';
+  } else if (g.phase === 'hunter') {
+    els.chatNote.textContent = '猎人正在开枪';
+  } else {
+    els.chatNote.textContent = '天亮了，等待公布结果';
+  }
 }
 
 async function startGame() {
@@ -1265,10 +1436,14 @@ async function startGame() {
       nightIndex: 0,
       votes: null,
       runoffSeats: null,
+      voteHistory: [],
+      speechOrder: null,
+      speechIndex: 0,
       deaths: [],
       log: [{ day: 1, kind: 'system', text: `板子：${mode.name}，共 ${total} 人` }],
       winner: null,
       winReason: '',
+      ratingApplied: false,
     };
     g.log.push({ day: 1, kind: 'night', text: '第 1 夜 · 天黑请闭眼' });
     startNightInternal(true);
@@ -1374,7 +1549,17 @@ async function hostTick() {
       if (now >= g.deadline) await startDay();
     } else if (g.phase === 'day') {
       const handled = await handleDaySpecial(actions);
-      if (!handled && now >= g.deadline) await startVote();
+      if (handled) return;
+      const speaker = currentSpeaker();
+      if (speaker == null) {
+        await startVote();
+        return;
+      }
+      const speechActions = await fetchActions(g.day, 'speech');
+      const ended = speechActions.some(
+        (row) => row.seat === speaker && Number(row.payload?.turn) === g.speechIndex
+      );
+      if (ended || now >= g.deadline) await advanceSpeech();
     } else if (g.phase === 'vote' || g.phase === 'runoff') {
       if (allActed(g.step, actions) || now >= g.deadline) await resolveVote(actions);
     } else if (g.phase === 'hunter') {
@@ -1554,6 +1739,98 @@ function checkWin() {
   });
 }
 
+function crossLovers() {
+  if (!g?.lovers) return false;
+  const wolves = g.teams.wolves;
+  return g.lovers.some((seat) => wolves.includes(seat)) && g.lovers.some((seat) => !wolves.includes(seat));
+}
+
+function didPlayerWin(row) {
+  const wolves = g.teams.wolves;
+  if (g.winner === 'lovers') {
+    return (g.lovers || []).includes(row.seat) || row.seat === g.cupidSeat;
+  }
+  if (row.role === 'cupid') {
+    if (!g.lovers) return g.winner === 'good';
+    if (crossLovers()) return false;
+    const loversWolf = g.lovers.every((seat) => wolves.includes(seat));
+    return (g.winner === 'wolf') === loversWolf;
+  }
+  return g.winner === 'wolf' ? wolves.includes(row.seat) : !wolves.includes(row.seat);
+}
+
+async function applyRatings() {
+  if (!isHost() || !g || g.ratingApplied || !hostRoles.length) return;
+  const names = [...new Set(hostRoles.map((row) => row.name))];
+  const { data, error } = await client
+    .from('ratings')
+    .select('name, rating, games, wins')
+    .in('name', names);
+  if (error) {
+    toast('评分表还没建好：房主先在 Supabase 运行 supabase/migration-v4.sql');
+    return;
+  }
+  const base = new Map((data || []).map((row) => [row.name, row]));
+  const entries = hostRoles.map((row) => {
+    const old = base.get(row.name) || { rating: 1500, games: 0, wins: 0 };
+    return {
+      seat: row.seat,
+      name: row.name,
+      role: row.role,
+      rating: old.rating,
+      games: old.games || 0,
+      wins: old.wins || 0,
+      win: didPlayerWin(row),
+    };
+  });
+  const total = currentMode().roles.length;
+  const k = total <= 6 ? 32 : total <= 9 ? 28 : 24;
+  const calc = Rules.computeTeamElo(entries, k);
+  const upserts = new Map();
+  calc.forEach((player) => {
+    const old = entries.find((entry) => entry.name === player.name);
+    upserts.set(player.name, {
+      name: player.name,
+      rating: player.after,
+      games: (old?.games || 0) + 1,
+      wins: (old?.wins || 0) + (player.win ? 1 : 0),
+      updated_at: new Date().toISOString(),
+    });
+  });
+  const { error: saveError } = await client
+    .from('ratings')
+    .upsert([...upserts.values()], { onConflict: 'name' });
+  if (saveError) {
+    toast(`评分写入失败：${friendlyError(saveError)}`);
+    return;
+  }
+
+  g.rating = {
+    k,
+    players: calc.map((player) => {
+      const row = hostRoles.find((item) => item.seat === player.seat) || {};
+      const old = base.get(row.name) || { games: 0, wins: 0 };
+      const death = (g.deaths || []).filter((item) => item.seat === player.seat).slice(-1)[0] || null;
+      return {
+        seat: player.seat,
+        name: row.name,
+        role: row.role,
+        win: player.win,
+        alive: isAliveSeat(player.seat),
+        death,
+        votesReceived: (g.voteHistory || []).reduce((sum, item) => sum + (item.counts?.[player.seat] || 0), 0),
+        before: player.before,
+        delta: player.delta,
+        after: player.after,
+        games: (old.games || 0) + 1,
+        wins: (old.wins || 0) + (player.win ? 1 : 0),
+      };
+    }),
+  };
+  g.ratingApplied = true;
+  calc.forEach((player) => ratings.set(player.name, player.after));
+}
+
 async function finishGame(winner, reason) {
   g.phase = 'finished';
   g.step = 'finished';
@@ -1563,6 +1840,11 @@ async function finishGame(winner, reason) {
   const label = winner === 'wolf' ? '狼人阵营获胜' : winner === 'lovers' ? '第三方阵营获胜' : '好人阵营获胜';
   g.log.push({ day: g.day, kind: 'finish', text: `游戏结束：${label}（${reason}）` });
   stopHost();
+  try {
+    await applyRatings();
+  } catch (error) {
+    toast(`评分结算失败：${friendlyError(error)}`);
+  }
   await saveGame();
   await loadAllRoles();
   renderRoom();
@@ -1581,8 +1863,35 @@ async function startDawn() {
 async function startDay() {
   g.phase = 'day';
   g.step = 'day';
-  g.deadline = Date.now() + DUR.day;
-  g.log.push({ day: g.day, kind: 'system', text: `第 ${g.day} 天讨论开始（${Math.round(DUR.day / 1000)} 秒），随后投票` });
+  const alive = g.aliveSeats.slice().sort((a, b) => a - b);
+  const startIndex = alive.length ? Math.floor(Math.random() * alive.length) : 0;
+  g.speechOrder = alive.slice(startIndex).concat(alive.slice(0, startIndex));
+  g.speechIndex = 0;
+  g.deadline = g.speechOrder.length ? Date.now() + DUR.speech : 0;
+  g.log.push({
+    day: g.day,
+    kind: 'system',
+    text: `第 ${g.day} 天讨论开始，发言顺序：${g.speechOrder.map(pad).join(' → ') || '无'}（每人 ${Math.round(DUR.speech / 1000)} 秒）`,
+  });
+  if (!g.speechOrder.length) {
+    await startVote();
+    return;
+  }
+  await saveGame();
+  renderRoom();
+}
+
+async function advanceSpeech() {
+  if (!g || g.phase !== 'day') return;
+  g.speechIndex += 1;
+  while (g.speechIndex < g.speechOrder.length && !isAliveSeat(g.speechOrder[g.speechIndex])) {
+    g.speechIndex += 1;
+  }
+  if (g.speechIndex >= g.speechOrder.length) {
+    await startVote();
+    return;
+  }
+  g.deadline = Date.now() + DUR.speech;
   await saveGame();
   renderRoom();
 }
@@ -1671,6 +1980,8 @@ async function resolveVote(actions) {
   const voteText = rows.map((a) => `${pad(a.seat)}→${a.target > 0 ? pad(a.target) : '弃'}`).join('、');
   const tally = Rules.tallyVotes(rows);
   g.votes = tally.counts;
+  g.voteHistory = g.voteHistory || [];
+  g.voteHistory.push({ day: g.day, phase: g.phase, counts: { ...tally.counts } });
 
   if (voteText) g.log.push({ day: g.day, kind: 'vote', text: `投票结果：${voteText}` });
 
@@ -1836,11 +2147,14 @@ function friendlyError(error) {
   if (/fetch|network|Load failed|Failed to fetch/i.test(message)) {
     return '网络连不上服务器，检查加速器后重试';
   }
+  if (/ratings/i.test(message)) {
+    return '评分表还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v4.sql';
+  }
   if (/relation .* does not exist|column .* does not exist|schema cache|42703|42P01|PGRST205/i.test(message)) {
     return '数据库还没升级，先在 Supabase SQL Editor 运行 supabase/migration-v3.sql';
   }
   if (/permission denied|row-level security/i.test(message)) {
-    return '数据库权限没配好，先运行 supabase/migration-v3.sql';
+    return '数据库权限没配好，先运行 supabase/migration-v4.sql（评分）或 migration-v3.sql';
   }
   return message;
 }
@@ -1899,12 +2213,22 @@ els.revealBtn.addEventListener('click', () => {
 
 els.chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  if (!g || g.phase !== 'day' || !isAliveSeat(myRow?.seat)) return;
+  if (!g || !isAliveSeat(myRow?.seat)) return;
   const text = els.chatInput.value.trim();
   if (!text) return;
+  let step = null;
+  if (g.phase === 'night' && isMyWolf()) step = 'wolfchat';
+  else if (g.phase === 'day' && currentSpeaker() === myRow?.seat) step = 'chat';
+  if (!step) return;
   els.chatInput.value = '';
-  act('chat', null, { name: members.find((m) => m.id === session.playerId)?.name || session.name, text });
+  act(step, null, { name: members.find((m) => m.id === session.playerId)?.name || session.name, text });
   setTimeout(loadChat, 300);
+});
+
+els.endSpeechBtn.addEventListener('click', () => {
+  if (!g || g.phase !== 'day' || currentSpeaker() !== myRow?.seat) return;
+  els.endSpeechBtn.disabled = true;
+  act('speech', null, { turn: g.speechIndex });
 });
 
 els.leaveBtn.addEventListener('click', () => {

@@ -118,6 +118,49 @@
     return null;
   }
 
+  // 团队零和 Elo：每人与所有“胜负不同”的玩家算期望，再让胜方总加分等于负方总扣分
+  function computeTeamElo(entries, k) {
+    const K = k || 24;
+    const players = entries.map((entry) => ({ ...entry, win: Boolean(entry.win) }));
+    const raw = players.map((player) => {
+      const opponents = players.filter((other) => other.win !== player.win);
+      if (!opponents.length) return 0;
+      let expected = 0;
+      opponents.forEach((other) => {
+        expected += 1 / (1 + Math.pow(10, (other.rating - player.rating) / 400));
+      });
+      expected /= opponents.length;
+      return K * ((player.win ? 1 : 0) - expected);
+    });
+    let winTotal = 0;
+    let loseTotal = 0;
+    players.forEach((player, index) => {
+      if (player.win) winTotal += raw[index];
+      else loseTotal += -raw[index];
+    });
+    const target = (winTotal + loseTotal) / 2;
+    const winScale = winTotal > 1e-9 ? target / winTotal : 1;
+    const loseScale = loseTotal > 1e-9 ? target / loseTotal : 1;
+    const scaled = raw.map((value, index) => value * (players[index].win ? winScale : loseScale));
+    const rounded = scaled.map((value) => Math.round(value));
+    const residual = rounded.reduce((sum, value) => sum + value, 0);
+    if (residual !== 0) {
+      let biggest = 0;
+      for (let i = 1; i < rounded.length; i += 1) {
+        if (Math.abs(rounded[i]) > Math.abs(rounded[biggest])) biggest = i;
+      }
+      rounded[biggest] -= residual;
+    }
+    return players.map((player, index) => ({
+      seat: player.seat,
+      name: player.name,
+      win: player.win,
+      delta: rounded[index],
+      before: player.rating,
+      after: Math.max(100, player.rating + rounded[index]),
+    }));
+  }
+
   function shuffle(list) {
     for (let i = list.length - 1; i > 0; i -= 1) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -136,6 +179,7 @@
     wolfKillTop,
     tallyVotes,
     winCheck,
+    computeTeamElo,
     shuffle,
   };
 
