@@ -5,8 +5,83 @@ import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 
 const read = path => readFileSync(new URL('../' + path, import.meta.url), 'utf8');
-const jwt = id => [ {alg:'HS256',typ:'JWT'}, {sub:id,exp:Math.floor(Date.now()/1000)+3600}, 'signature' ]
+const jwt = (id, tag = 'signature') => [ {alg:'HS256',typ:'JWT'}, {sub:id,exp:Math.floor(Date.now()/1000)+3600}, tag ]
   .map(part => Buffer.from(JSON.stringify(part)).toString('base64url')).join('.');
+
+function loadApp(dom) {
+  const run = code => vm.runInContext(code, dom.getInternalVMContext());
+  for (const script of dom.window.document.querySelectorAll('script[src]')) {
+    const src = script.getAttribute('src').split('?')[0];
+    if (!src.startsWith('vendor/') && src !== 'js/config.js') run(read(src));
+  }
+  run('loadHistory=loadLeaderboard=()=>{};');
+  return run;
+}
+
+for (const outcome of ['approved', 'banned', 'invalid token', 'rotated token']) {
+  test(`reload with a saved session reads the profile directly (${outcome})`, {timeout:5000}, async t => {
+    const url = 'http://localhost', id = 'alice', token = jwt(id), replacement = jwt(id, 'replacement');
+    const rotated = outcome === 'rotated token';
+    const seed = new JSDOM('', {url,runScripts:'outside-only'});
+    const next = new JSDOM(read('index.html'), {url,runScripts:'outside-only'});
+    const requests = [], profileStarted = Promise.withResolvers(), response = Promise.withResolvers();
+    t.after(async () => {
+      response.resolve();
+      if (run) await run('profileRead?.promise')?.catch(()=>{});
+      seed.window.close(); next.window.close();
+    });
+    let run;
+    for (const w of [seed.window,next.window]) {
+      const fetch = async (input, init) => {
+        const path = new URL(input.url || input).pathname;
+        const bearer = new Headers(init?.headers || input.headers).get('authorization');
+        if (w === next.window) {
+          requests.push([path,bearer]);
+          profileStarted.resolve();
+          await response.promise;
+        }
+        if (path === '/auth/v1/user') return Response.json({id,aud:'authenticated',role:'authenticated'});
+        if (path === '/rest/v1/profiles') {
+          return outcome === 'invalid token' || (rotated && bearer === `Bearer ${token}`)
+            ? Response.json({code:'PGRST301',message:'JWT expired'}, {status:401})
+            : Response.json([{id,username:'Alice',status:rotated ? 'approved' : outcome,role:'member'}]);
+        }
+        throw new Error('Unexpected offline test request: ' + path);
+      };
+      Object.assign(w,{fetch,Headers,Request,Response,TextEncoder,TextDecoder,WebSocket,
+        WOLF_CONFIG:{SUPABASE_URL:url,SUPABASE_KEY:'fixture'}});
+      w.eval(read('vendor/supabase.js'));
+    }
+    const sdk = seed.window.supabase.createClient(url,'fixture',{auth:{autoRefreshToken:false}});
+    assert.ifError((await sdk.auth.setSession({access_token:token,refresh_token:'fixture-alice'})).error);
+    const copySession = () => {
+      for (const key of Object.keys(seed.window.localStorage)) {
+        next.window.localStorage.setItem(key,seed.window.localStorage.getItem(key));
+      }
+    };
+    copySession();
+    run = loadApp(next);
+    await profileStarted.promise;
+    assert.deepEqual(requests,[['/rest/v1/profiles',`Bearer ${token}`]]);
+    assert.match(run('els.accountBtn.textContent'),/正在恢复登录状态/);
+    assert.equal(run('profile'),null);
+    assert.equal(run('els.createBtn.disabled && els.joinBtn.disabled && els.authModal.hidden'),true);
+    const ready = run('profileRead.promise');
+    if (rotated) {
+      // A peer has refreshed the saved session while the old request was in flight.
+      assert.ifError((await sdk.auth.setSession({access_token:replacement,refresh_token:'fixture-alice-new'})).error);
+      copySession();
+    }
+    response.resolve();
+    await ready;
+    assert.deepEqual(requests,(rotated ? [token,replacement] : [token]).map(token => ['/rest/v1/profiles',`Bearer ${token}`]));
+    assert.equal(run('els.accountBtn.disabled'),false);
+    assert.equal(run('accountApproved()'),rotated || outcome === 'approved');
+    assert.equal(run('els.authModal.hidden'),outcome !== 'invalid token');
+    if (outcome === 'invalid token') assert.match(run('els.authStatus.textContent'),/请重新登录/);
+    else assert.match(run('els.accountBtn.textContent'),/Alice/);
+  });
+}
 
 // Two copies of the shipped Auth SDK share same-origin storage and use real BroadcastChannels.
 // Only HTTP is faked: no hosted Auth, database or signing keys are involved.
@@ -35,12 +110,7 @@ test('SDK account replacement without SIGNED_OUT clears private state before rou
     w.WOLF_CONFIG = {SUPABASE_URL:'http://localhost',SUPABASE_KEY:'fixture'};
     w.eval(read('vendor/supabase.js'));
   }
-  const w = a.window, run = code => vm.runInContext(code, a.getInternalVMContext());
-  for (const script of w.document.querySelectorAll('script[src]')) {
-    const src = script.getAttribute('src').split('?')[0];
-    if (!src.startsWith('vendor/') && src !== 'js/config.js') run(read(src));
-  }
-  run(`loadHistory=loadLeaderboard=()=>{};`);
+  const w = a.window, run = loadApp(a);
   // Observe completed UI routing, not just event delivery.
   const waitForUser = id => new Promise(resolve => {
     const check = () => { if (run('profile?.id') !== id) return; observer.disconnect(); resolve(); };

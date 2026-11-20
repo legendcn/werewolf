@@ -35,10 +35,11 @@ async function gameRequest(op, code, args = {}) {
 async function createRoom() {
   const epoch = authEpoch;
   for (let i = 0; i < 6; i++) {
-    const result = await gameRequest('create', randomCode(), { mode: els.modeSelect.value });
+    const saved = localStorage.getItem(membershipKey());
+    const result = await gameRequest('create', randomCode(), { mode: els.modeSelect.value, includeSnapshot: true });
     if (epoch !== authEpoch) return;
     if (!result.collision) {
-      enterRoom(result);
+      enterRoom(result, localStorage.getItem(membershipKey()) === saved ? result.snapshot : null);
       return;
     }
   }
@@ -46,8 +47,9 @@ async function createRoom() {
 }
 async function joinRoom(_name, code) {
   const epoch = authEpoch;
-  const result = await gameRequest('join', code);
-  if (epoch === authEpoch) enterRoom(result);
+  const saved = localStorage.getItem(membershipKey());
+  const result = await gameRequest('join', code, { includeSnapshot: true });
+  if (epoch === authEpoch) enterRoom(result, localStorage.getItem(membershipKey()) === saved ? result.snapshot : null);
 }
 function membershipKey() { return `${SESSION_KEY}:${profile?.id}`; }
 function newerSeat(active) {
@@ -75,12 +77,21 @@ async function restoreSession() {
     return;
   }
   if (parsed.accountId && parsed.accountId !== profile?.id) return;
-  const result = await gameRequest('restore', parsed.code);
+  let result;
+  try {
+    result = await gameRequest('restore', parsed.code, { includeSnapshot: true });
+  } catch (error) {
+    if (!error.retry) throw error;
+    if (epoch !== authEpoch || session || localStorage.getItem(key) !== saved) return;
+    // A rolled-back settlement shouldn't prevent reconnecting. Restore only
+    // the seat and let the normal snapshot poll handle settlement retries.
+    result = await gameRequest('restore', parsed.code);
+  }
   if (epoch !== authEpoch || session || localStorage.getItem(key) !== saved) return;
   if (key === SESSION_KEY && (localStorage.getItem(ownKey) !== null || result.playerId !== parsed.playerId)) return;
   if (result.gone) localStorage.removeItem(key);
   else {
-    enterRoom(result);
+    enterRoom(result, result.snapshot);
     if (key === SESSION_KEY && localStorage.getItem(key) === saved) localStorage.removeItem(key);
   }
 }
@@ -96,16 +107,40 @@ function sameSnapshot(before, after) {
   return before?.revision === after.revision && JSON.stringify(before) === JSON.stringify(after);
 }
 
-function applySnapshot(data, skipUnchanged = false) {
+function roomViewWithoutChat({ revision, chat, viewTag, ...view }) {
+  return view;
+}
+
+function updateRoomChat(data) {
+  chatRows = data.channel === 'chat' ? data.chat : [];
+  wolfChatRows = data.channel === 'wolfchat' ? data.chat : [];
+}
+
+function noteRoomSynced() {
+  // The clock updates independently, but a queued draft may need another attempt.
+  if (pendingSpeechCount()) updateChatForm();
+  setConn('已连接 · 服务端同步中', true);
+}
+
+function checkUnchangedView(data, code, viewTag) {
+  if (!viewTag || data.code !== code || data.viewTag !== viewTag) throw new Error('房间同步响应不匹配');
+}
+
+function applySnapshot(data, allowPartial = false) {
   if (!session || data.code !== session.code || data.revision < (room?.revision ?? -1)) return;
   if (newerSeat(session) || data.me?.id !== session.playerId) {
     exitRoomLocal('此标签页的座位已失效。刷新可恢复当前座位，或用房间码重新加入。');
     return;
   }
-  if (skipUnchanged && sameSnapshot(room, data)) {
-    // The clock already updates independently. Keep the existing draft timer.
-    if (pendingSpeechCount()) updateChatForm();
-    setConn('已连接 · 服务端同步中', true);
+  if (allowPartial && room && JSON.stringify(roomViewWithoutChat(room)) === JSON.stringify(roomViewWithoutChat(data))) {
+    // A message advances the revision but need not reset seat controls.
+    const chatChanged = JSON.stringify(room.chat) !== JSON.stringify(data.chat);
+    room = data;
+    if (chatChanged) {
+      updateRoomChat(data);
+      renderChat();
+    }
+    noteRoomSynced();
     return;
   }
   const previous = g;
@@ -125,8 +160,7 @@ function applySnapshot(data, skipUnchanged = false) {
   }
   submitted = new Set(data.submitted);
   wolfPicks = data.wolfPicks;
-  chatRows = data.channel === 'chat' ? data.chat : [];
-  wolfChatRows = data.channel === 'wolfchat' ? data.chat : [];
+  updateRoomChat(data);
   if (!feedSeeded) {
     localFeed.push(`房间 ${session.code} · ${currentMode().name}`);
     feedSeeded = true;
@@ -157,10 +191,11 @@ async function retrySettlement() {
 async function roomCommand(op, args) {
   const active = session;
   if (!active) return;
+  const viewTag = op === 'snapshot' && !args?.retry ? room?.viewTag ?? '' : undefined;
   let data;
   try {
     if (newerSeat(active)) { exitRoomLocal('座位已变化，刷新可恢复新座位'); return; }
-    data = await gameRequest(op, active.code, { ...args, playerId: active.playerId });
+    data = await gameRequest(op, active.code, { ...args, playerId: active.playerId, viewTag });
   } catch (error) {
     const retry = error.retry;
     if (retry && active === session && retry.matchId === g?.matchId && retry.revision >= room?.revision &&
@@ -173,13 +208,21 @@ async function roomCommand(op, args) {
     throw error;
   }
   if (active !== session) return;
+  const unchanged = data.unchanged === true;
+  if (unchanged) {
+    checkUnchangedView(data, active.code, viewTag);
+    if (newerSeat(active)) { exitRoomLocal('座位已变化，刷新可恢复新座位'); return; }
+    if (room?.viewTag !== viewTag || room.revision !== data.revision) return;
+    data = room;
+  }
   if (failedSettlement && data.revision >= failedSettlement.retry.revision &&
       (data.revision > failedSettlement.retry.revision || data.options?.g?.matchId !== failedSettlement.retry.matchId ||
         (op === 'snapshot' && failedSettlement.op === 'snapshot'))) {
     clearSettlementRetry();
   }
   if (data.gone) exitRoomLocal(op === 'leave' ? '已退出房间' : '你已不在该房间');
-  else applySnapshot(data, op === 'snapshot');
+  else if (unchanged) noteRoomSynced();
+  else applySnapshot(data, op === 'snapshot' || (op === 'act' && ['chat', 'wolfchat'].includes(args?.step)));
 }
 async function pollOnce() {
   if (!session || document.hidden || polling) return;
@@ -236,8 +279,13 @@ async function act(step, target, payload = {}) {
 async function spectateLoad() {
   const active = spectate;
   if (!active) return;
-  const data = await gameRequest('spectate', active.code);
+  const viewTag = active.room?.viewTag ?? '';
+  const data = await gameRequest('spectate', active.code, { viewTag });
   if (spectate !== active) return;
+  if (data.unchanged === true) {
+    checkUnchangedView(data, active.code, viewTag);
+    return;
+  }
   if (!data.options?.g) {
     exitSpectate();
     toast(data.gone ? '旁观的房间不存在' : '这局尚未开始或已重置');

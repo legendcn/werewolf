@@ -116,6 +116,74 @@ test('rejoining a saved room does not fetch lobby data before or during the rest
   assert.deepEqual(requests, ['leaderboard', 'history']);
 });
 
+for (const op of ['create', 'join', 'restore']) {
+  test(`${op} applies the first snapshot without another game request`, async t => {
+    const sent = [];
+    const snapshot = {
+      code:'123456', revision:2, hostId:'p', options:{mode:'newbie6',g:null},
+      members:[{id:'p',name:'Alice',online:true}], me:{id:'p',seat:null,role:null},
+      channel:'chat',chat:[],wolfPicks:[],submitted:[],
+    };
+    const {run,w} = await page(t,{ functions:{invoke:async (_,{body})=>{
+      sent.push(body);
+      return {data:body.op === 'snapshot' ? snapshot : {code:snapshot.code,playerId:'p',name:'Alice',snapshot}};
+    }} });
+    w.localStorage.setItem('wolf.session:alice',JSON.stringify({code:snapshot.code,playerId:'p',accountId:'alice'}));
+    run(`profile={id:'alice',status:'approved'}; randomCode=()=> '123456'; loadRatings=async()=>{}`);
+    await run({create:'createRoom()',join:`joinRoom('Alice','123456')`,restore:'restoreSession()'}[op]);
+    await new Promise(r=>setImmediate(r));
+    assert.deepEqual(sent.map(r=>[r.op,r.includeSnapshot]),[[op,true]]);
+    assert.equal(run('room.revision'),2);
+    assert.equal(run('els.roomView.hidden'),false);
+    assert.match(run('els.playerList.textContent'),/Alice/);
+    assert.equal(run('!!pollTimer'),true);
+    const saved = JSON.parse(w.localStorage.getItem('wolf.session:alice'));
+    assert.ok(!('snapshot' in saved));
+  });
+}
+
+for (const unusable of ['missing', 'different member']) {
+  test(`entry with ${unusable} first snapshot falls back to a membership-bound poll`, async t => {
+    const sent = [];
+    const snapshot = {
+      code:'123456',revision:2,hostId:'p',options:{mode:'newbie6',g:null},
+      members:[{id:'p',name:'Alice',online:true}],me:{id:'p',seat:null,role:null},channel:'chat',chat:[],wolfPicks:[],submitted:[],
+    };
+    const {run} = await page(t,{ functions:{invoke:async (_,{body})=>{
+      sent.push(body);
+      if (body.op === 'snapshot') return {data:snapshot};
+      return {data:{code:snapshot.code,playerId:'p',name:'Alice',
+        snapshot:unusable === 'missing' ? undefined : {...snapshot,me:{id:'other',role:'werewolf'}}}};
+    }} });
+    run(`profile={id:'alice',status:'approved'}; loadRatings=async()=>{}`);
+    await run(`joinRoom('Alice','123456')`);
+    await new Promise(r=>setImmediate(r));
+    assert.deepEqual(sent.map(r=>r.op),['join','snapshot']);
+    assert.equal(sent[1].playerId,'p');
+    assert.equal(run('myRow.id'),'p');
+    assert.equal(run('myRow.role'),null);
+  });
+}
+
+test('a rolled-back settlement during restore still recovers the seat and starts polling', async t => {
+  const sent = [];
+  const {run,w} = await page(t,{ functions:{invoke:async (_,{body})=>{
+    sent.push(body);
+    if (body.op === 'restore' && body.includeSnapshot) return {data:{
+      code:'SETTLEMENT_RETRY',error:'本次操作未保存',retry:{matchId:'m',revision:2},
+    }};
+    if (body.op === 'restore') return {data:{code:'123456',playerId:'p',name:'Alice'}};
+    return {error:new Error('offline')};
+  }} });
+  w.localStorage.setItem('wolf.session:alice',JSON.stringify({code:'123456',playerId:'p',accountId:'alice'}));
+  run(`profile={id:'alice',status:'approved'}`);
+  await run('restoreSession()');
+  await new Promise(r=>setImmediate(r));
+  assert.deepEqual(sent.map(r=>[r.op,r.includeSnapshot]),[['restore',true],['restore',undefined],['snapshot',undefined]]);
+  assert.equal(run('session.playerId'),'p');
+  assert.equal(run('!!pollTimer'),true);
+});
+
 test('unchanged polls preserve room controls, but presence changes with the same revision still render', async t => {
   const {run,w} = await page(t);
   const snapshot = {
@@ -135,6 +203,72 @@ test('unchanged polls preserve room controls, but presence changes with the same
   await run(`roomCommand('snapshot')`);
   assert.notStrictEqual(w.document.querySelector('#playerList li'), seat);
   assert.equal(run('members[0].online'), false);
+});
+
+test('idle polls accept a short confirmation only for the room view still on screen', async t => {
+  const {run,w} = await page(t), sent = [];
+  const full = {
+    code:'123456',revision:4,viewTag:'a'.repeat(64),hostId:'p',options:{mode:'newbie6',g:null},
+    members:[{id:'p',name:'Alice',online:true}],me:{id:'p',seat:null,role:null},
+    channel:'chat',chat:[],wolfPicks:[],submitted:[],
+  };
+  const unchanged = {code:full.code,revision:full.revision,viewTag:full.viewTag,unchanged:true};
+  let reply = full;
+  w.getSnap = (_,__,args) => { sent.push(args); return structuredClone(reply); };
+  run(`session={code:'123456',playerId:'p'}; ratingsKey='Alice'; gameRequest=async(...args)=>getSnap(...args);`);
+  await run(`roomCommand('snapshot')`);
+  const seat = w.document.querySelector('#playerList li');
+  assert.ok(seat);
+  reply = unchanged;
+  await run(`roomCommand('snapshot')`);
+  assert.deepEqual(sent.map(args=>[args.playerId,args.viewTag]),[['p',''],['p',full.viewTag]]);
+  assert.strictEqual(w.document.querySelector('#playerList li'),seat);
+  assert.equal(run('room.me.id'),'p');
+
+  // An action may return a newer view before the short poll response arrives.
+  w.delayed = Promise.withResolvers();
+  run(`gameRequest=()=>delayed.promise;`);
+  const pending = run(`roomCommand('snapshot')`);
+  w.newer = {...full, revision:5, viewTag:undefined, members:[{id:'p',name:'Alice',online:false}]};
+  run('applySnapshot(newer)');
+  w.delayed.resolve(unchanged);
+  await pending;
+  assert.equal(run('room.revision'),5);
+  assert.equal(run('members[0].online'),false);
+});
+
+test('chat-only polls and sends refresh messages without rebuilding controls', async t => {
+  const {run,w} = await page(t);
+  const snapshot = {
+    code:'123456', revision:10, hostId:'p',
+    options:{mode:'newbie6',g:{phase:'day',step:'day',day:1,matchId:'m',aliveSeats:[1,2],speechOrder:[1,2],speechIndex:0,teams:{wolves:[1]}}},
+    members:[{id:'p',name:'Alice',seat:1,online:true},{id:'q',name:'Bob',seat:2,online:true}],
+    me:{id:'p',seat:1,role:'werewolf'},channel:'chat',chat:[],wolfPicks:[],submitted:[],
+  };
+  w.getSnap = () => structuredClone(snapshot);
+  run(`session={code:'123456',playerId:'p'}; ratingsKey='Alice|Bob'; gameRequest=async()=>getSnap();`);
+  await run(`roomCommand('snapshot')`);
+  const seat = w.document.querySelector('#playerList li');
+  const actions = Array.from(w.document.querySelector('#actionArea').childNodes);
+  assert.ok(seat && actions.length);
+  for (let i = 1; i <= 10; i++) {
+    snapshot.revision++;
+    snapshot.chat.push({ day:1,payload:{text:`发言 ${i}`} });
+    await run(i === 1 ? `roomCommand('act',{step:'chat'})` : `roomCommand('snapshot')`);
+  }
+  assert.equal(run('room.revision'), snapshot.revision);
+  assert.match(run('els.chatFeed.textContent'), /发言 10/);
+  assert.strictEqual(w.document.querySelector('#playerList li'), seat);
+  assert.ok(actions.every((node, i) => w.document.querySelector('#actionArea').childNodes[i] === node));
+
+  snapshot.revision++;
+  Object.assign(snapshot.options.g,{phase:'night',step:'wolves',day:2});
+  snapshot.channel = 'wolfchat';
+  snapshot.chat = [{day:2,payload:{text:'夜聊'}}];
+  await run(`roomCommand('snapshot')`);
+  assert.notStrictEqual(w.document.querySelector('#playerList li'), seat);
+  assert.match(run('els.chatFeed.textContent'), /夜聊/);
+  assert.doesNotMatch(run('els.chatFeed.textContent'), /发言/);
 });
 
 test('real DOM accepts a new match and rejects delayed snapshots from the old one', async (t) => {

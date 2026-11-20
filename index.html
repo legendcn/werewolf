@@ -10,8 +10,8 @@
   <script defer src="js/config.js?v=1.1.0"></script>
   <script defer src="supabase/functions/_shared/modes.js?v=1.1.0"></script>
   <script defer src="supabase/functions/_shared/rules.js?v=1.1.0"></script>
-  <script defer src="js/room-api.js?v=1.1.0-perf"></script>
-  <script defer src="js/app.js?v=1.1.0-perf"></script>
+  <script defer src="js/room-api.js?v=1.1.0-perf.5"></script>
+  <script defer src="js/app.js?v=1.1.0-perf.4"></script>
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -24,7 +24,7 @@
         <li class="nav-item d-none d-sm-block"><a class="nav-link" href="https://github.com/legendcn/werewolf">源码</a></li>
       </ul>
       <div class="sr-account">
-        <button id="accountBtn" class="btn btn-sm btn-outline-dark" type="button">登录 / 注册</button>
+        <button id="accountBtn" class="btn btn-sm btn-outline-dark" type="button" aria-busy="true" disabled>正在恢复登录状态…</button>
         <button id="pendingBadge" class="sr-pending-badge" type="button" hidden title="有待审核玩家，点击处理">0</button>
         <div id="accountMenu" class="sr-account-menu" hidden>
           <div class="sr-account-head">

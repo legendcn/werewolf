@@ -221,6 +221,7 @@ let phaseKey = '';
 let feedSeeded = false;
 let profile = null;
 let authBusy = false;
+let authChecking = Boolean(client);
 let authEpoch = 0; // invalidate responses that started under a previous login
 let authUserId = null; // SDK principal, even while the profile is still loading
 let profileRead = null;
@@ -278,6 +279,7 @@ function closeAccountMenu() {
 }
 
 function openAuthModal() {
+  if (authChecking) return;
   closeAccountMenu();
   if (els.authModal) els.authModal.hidden = false;
 }
@@ -434,7 +436,9 @@ function applyAccountUI() {
   }
   if (!approved && spectate) showHome();
 
-  els.accountBtn.textContent = has ? `${profile.username} ▾` : '登录 / 注册';
+  els.accountBtn.disabled = authChecking;
+  els.accountBtn.setAttribute('aria-busy', String(authChecking));
+  els.accountBtn.textContent = authChecking ? '正在恢复登录状态…' : has ? `${profile.username} ▾` : '登录 / 注册';
   els.accountTopName.textContent = has ? profile.username : '游客';
   els.accountTopRole.textContent = has ? roleLabel(profile.role) : '未登录';
   els.accountTopRole.className = `badge ${has ? roleBadgeClass(profile.role) : 'badge-secondary'}`;
@@ -516,14 +520,18 @@ function clearRoomViews() {
     els.roomCodeLabel, els.activeRoomCode]) el.replaceChildren();
 }
 
-function showAuthScreen() {
+function showAuthScreen(note = '') {
+  authChecking = false;
   authUserId = null;
   clearAuthViews();
   applyAccountUI();
+  setStatus(note || '请登录或注册');
+  setAuthNote(note);
   openAuthModal();
 }
 
 function showAuthProblem(title, text) {
+  authChecking = false;
   clearAuthViews();
   applyAccountUI();
   els.authForms.hidden = true;
@@ -576,21 +584,41 @@ function fetchProfileAndRoute() {
   return promise;
 }
 
-async function readProfileAndRoute(epoch, allowRepair = true) {
-  const { data: userData, error: userError } = await client.auth.getUser();
+async function readProfileAndRoute(epoch, allowRepair = true, allowTokenRetry = true) {
+  const { data: saved, error: sessionError } = await client.auth.getSession();
   if (epoch !== authEpoch) return false;
-  if (userError) throw userError;
-  if (!userData?.user) {
+  if (sessionError) throw sessionError;
+  const id = saved?.session?.user?.id, token = saved?.session?.access_token;
+  if (!id || !token) {
     showAuthScreen();
     return false;
   }
-  if (authUserId !== userData.user.id) return false;
-  const { data, error } = await client
+  if (authUserId !== id) return false;
+  // Local session data selects the request, not the account's privileges.
+  // PostgREST validates the token and applies RLS in the same network request.
+  const { data, error, status } = await client
     .from('profiles')
     .select('id, username, role, status')
-    .eq('id', userData.user.id)
+    .eq('id', id)
+    .setHeader('Authorization', `Bearer ${token}`)
     .maybeSingle();
   if (epoch !== authEpoch) return false;
+  const { data: current, error: currentError } = await client.auth.getSession();
+  if (epoch !== authEpoch) return false;
+  if (currentError) throw currentError;
+  const latest = current?.session;
+  if (!latest?.access_token) {
+    showAuthScreen('登录状态已失效，请重新登录');
+    return false;
+  }
+  if (latest.user?.id !== id) return false;
+  if (status === 401) {
+    if (allowTokenRetry && latest.access_token !== token) return readProfileAndRoute(epoch, allowRepair, false);
+    if (latest.access_token === token) {
+      showAuthScreen('无法验证登录状态，请重新登录');
+      return false;
+    }
+  }
   if (error) {
     showAuthProblem(
       '账号系统未就绪',
@@ -601,9 +629,10 @@ async function readProfileAndRoute(epoch, allowRepair = true) {
   if (!data) {
     const n = localStorage.getItem(NAME_KEY);
     if (allowRepair && n && NAME_RE.test(n)) {
-      const repair = await client.rpc('repair_wolf_profile', { n });
+      const repair = await client.rpc('repair_wolf_profile', { n })
+        .setHeader('Authorization', `Bearer ${latest.access_token}`);
       if (epoch !== authEpoch) return false;
-      if (!repair.error) return readProfileAndRoute(epoch, false);
+      if (!repair.error) return readProfileAndRoute(epoch, false, allowTokenRetry);
     }
     showAuthProblem(
       '账号资料缺失',
@@ -611,7 +640,9 @@ async function readProfileAndRoute(epoch, allowRepair = true) {
     );
     return false;
   }
+  if (data.id !== id) throw new Error('账号资料与当前会话不一致');
   const wasApproved = accountApproved();
+  authChecking = false;
   profile = data;
   applyAccountUI();
   if (data.status === 'approved') {
@@ -897,11 +928,11 @@ function updateModeHint() {
   els.modeHint.textContent = `${mode.desc} 需 ${mode.roles.length} 人。`;
 }
 
-function enterRoom(nextSession) {
+function enterRoom({ code, playerId, name }, firstSnapshot) {
   clearSettlementRetry();
-  session = nextSession;
-  localStorage.setItem(membershipKey(), JSON.stringify({ ...session, accountId: profile?.id }));
-  els.roomCodeLabel.textContent = session.code;
+  const active = session = { code, playerId, name };
+  localStorage.setItem(membershipKey(), JSON.stringify({ ...active, accountId: profile?.id }));
+  els.roomCodeLabel.textContent = code;
   room = null;
   members = [];
   myRow = null;
@@ -923,7 +954,12 @@ function enterRoom(nextSession) {
   showRoom();
   updateHomeRoomCard();
   setConn('连接中…');
-  pollOnce();
+  if (firstSnapshot?.code === code && firstSnapshot.me?.id === playerId &&
+      Number.isSafeInteger(firstSnapshot.revision) && firstSnapshot.options && Array.isArray(firstSnapshot.members)) {
+    applySnapshot(firstSnapshot);
+  }
+  if (session !== active) return;
+  if (!room) pollOnce(); // Old functions return only the membership record.
   startPolling();
 }
 
@@ -3286,10 +3322,12 @@ function onAuthChange(event, sdkSession) {
   if (!id || id === authUserId) return; // same user: token refresh/refocus is not a logout
   if (authUserId !== null || (profile && profile.id !== id)) {
     clearAuthViews(); // synchronous: no old frame or outstanding response survives a switch
-    applyAccountUI();
-    setStatus('账号已切换，正在读取资料…');
   } else ++authEpoch;
   authUserId = id;
+  authChecking = true;
+  applyAccountUI();
+  closeAuthModal();
+  setStatus('正在恢复登录状态…');
   const epoch = authEpoch;
   // Supabase holds its auth lock during callbacks. Defer all SDK reads until it releases it.
   setTimeout(() => {
@@ -3315,12 +3353,12 @@ function boot() {
 
   if (!client) {
     setStatus('服务器未配置 · 等待 js/config.js 填入 Supabase 地址');
-    els.createBtn.disabled = true;
-    els.joinBtn.disabled = true;
+    applyAccountUI();
     return;
   }
 
-  setStatus('服务器已连接 · 请登录或注册');
+  setStatus('正在恢复登录状态…');
+  applyAccountUI();
   // INITIAL_SESSION also handles startup; don't race it with a separate getSession().
   client.auth.onAuthStateChange(onAuthChange);
 }

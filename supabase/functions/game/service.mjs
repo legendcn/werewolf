@@ -103,6 +103,7 @@ export async function dispatch(q, uid, cmd) {
   const mode = modeFor(room.options.mode);
   check(mode, '未知板子');
   let g = room.options.g || null;
+  let entry = null;
   if (op === 'join' || op === 'create') {
     if (!me) {
       check(!g, '本局已开始');
@@ -112,9 +113,15 @@ export async function dispatch(q, uid, cmd) {
         'insert into public.players(room_code,account_id,name) values($1,$2,$3) returning id,name',
         [code, uid, account.username],
       );
-      await q('update public.rooms set revision=revision+1 where code=$1', [code]);
+      const [updated] = await q('update public.rooms set revision=revision+1 where code=$1 returning revision', [code]);
+      room.revision = updated.revision;
+      if (cmd.includeSnapshot === true) {
+        rows = await q(rosterSQL, [code]);
+        me = rows.find((p) => p.account_id === uid && !p.departed);
+      }
     }
-    return { code, playerId: me.id, name: me.name };
+    entry = { code, playerId: me.id, name: me.name };
+    if (cmd.includeSnapshot !== true) return entry;
   }
   if (op !== 'spectate') {
     if (!me && ['restore', 'snapshot', 'leave'].includes(op)) return { gone: true };
@@ -131,9 +138,13 @@ export async function dispatch(q, uid, cmd) {
       check(cmd.playerId === me.id && cmd.matchId === (g?.matchId ?? null) &&
         (g || cmd.lobbyRevision === Number(room.revision)), '房间或对局已变化，请刷新后重试');
     }
-    if (op === 'restore') return { code, playerId: me.id, name: me.name };
+    if (op === 'restore') {
+      entry = { code, playerId: me.id, name: me.name };
+      if (cmd.includeSnapshot !== true) return entry;
+    }
     if (cmd.playerId !== me.id && op === 'snapshot') return { gone: true };
-    check(cmd.playerId === me.id, '房间成员已变化，请刷新');
+    // For entry, the seat was just selected by Auth UID under this room lock.
+    check(entry || cmd.playerId === me.id, '房间成员已变化，请刷新');
     await q('update public.players set last_seen=clock_timestamp() where id=$1', [me.id]);
     me.online = true;
   }
@@ -193,7 +204,7 @@ export async function dispatch(q, uid, cmd) {
       await q('update public.players set departed=true where id=$1', [p.id]);
     } else await q('delete from public.players where id=$1', [p.id]);
     changed = true;
-  } else if (op === 'act' || op === 'snapshot') {
+  } else if (op === 'act' || op === 'snapshot' || entry) {
     if (op === 'act') submit(referee, me, cmd, actions);
     referee.tick();
   } else check(op === 'spectate', '不支持的操作');
@@ -255,7 +266,7 @@ export async function dispatch(q, uid, cmd) {
       [g.matchId, channel, g.day, me ? 120 : 500],
     )
     : [];
-  return {
+  const snapshot = {
     code,
     revision: Number(room.revision),
     hostId: hostOf(rows),
@@ -287,4 +298,5 @@ export async function dispatch(q, uid, cmd) {
       }))
       : [],
   };
+  return entry ? { ...entry, snapshot } : snapshot;
 }
