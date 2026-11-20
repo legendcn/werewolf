@@ -1475,15 +1475,18 @@ async function startGame() {
 
     const roles = Rules.shuffle([...mode.roles]);
     const seats = Rules.shuffle(Array.from({ length: total }, (_, i) => i + 1));
-    for (let i = 0; i < members.length; i += 1) {
+    const roster = members.slice(0, total);
+    for (let i = 0; i < roster.length; i += 1) {
       const { error } = await client
         .from('players')
         .update({ role: roles[i], seat: seats[i], alive: true })
-        .eq('id', members[i].id);
+        .eq('id', roster[i].id);
       if (error) throw error;
     }
     await loadHostRoles();
-    if (hostRoles.length !== members.length) throw new Error('座位数据没写全，请重试一次');
+    if (hostRoles.length !== roster.length || hostRoles.some((row) => !row.seat || !row.role)) {
+      throw new Error('座位数据没写全，请重试一次');
+    }
     myRow = hostRoles.find((row) => row.id === session.playerId) || myRow;
 
     const rolesBySeat = {};
