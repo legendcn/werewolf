@@ -63,6 +63,16 @@ const els = {
   homeView: document.querySelector('#homeView'),
   roomView: document.querySelector('#roomView'),
   authCard: document.querySelector('#authCard'),
+  authModal: document.querySelector('#authModal'),
+  authClose: document.querySelector('#authClose'),
+  accountBtn: document.querySelector('#accountBtn'),
+  accountMenu: document.querySelector('#accountMenu'),
+  accountTopName: document.querySelector('#accountTopName'),
+  accountTopRole: document.querySelector('#accountTopRole'),
+  accountTopNote: document.querySelector('#accountTopNote'),
+  accountRefreshBtn: document.querySelector('#accountRefreshBtn'),
+  accountAdminBtn: document.querySelector('#accountAdminBtn'),
+  accountLogoutBtn: document.querySelector('#accountLogoutBtn'),
   authForms: document.querySelector('#authForms'),
   loginForm: document.querySelector('#loginForm'),
   loginName: document.querySelector('#loginName'),
@@ -82,7 +92,6 @@ const els = {
   activeRoomCode: document.querySelector('#activeRoomCode'),
   activeRoomNote: document.querySelector('#activeRoomNote'),
   backToRoomBtn: document.querySelector('#backToRoomBtn'),
-  lobbyBtn: document.querySelector('#lobbyBtn'),
   pendingCard: document.querySelector('#pendingCard'),
   pendingTitle: document.querySelector('#pendingTitle'),
   pendingText: document.querySelector('#pendingText'),
@@ -92,6 +101,10 @@ const els = {
   adminRefresh: document.querySelector('#adminRefresh'),
   startCard: document.querySelector('#start'),
   leaderboardCard: document.querySelector('#leaderboard'),
+  historyCard: document.querySelector('#historyCard'),
+  historyBody: document.querySelector('#historyBody'),
+  historyNote: document.querySelector('#historyNote'),
+  historyRefresh: document.querySelector('#historyRefresh'),
   heroStart: document.querySelector('#heroStart'),
   nameInput: document.querySelector('#playerName'),
   modeSelect: document.querySelector('#modeSelect'),
@@ -138,7 +151,31 @@ const els = {
   resultNote: document.querySelector('#resultNote'),
   revealBody: document.querySelector('#revealBody'),
   replayBtn: document.querySelector('#replayBtn'),
+  watchReplayBtn: document.querySelector('#watchReplayBtn'),
   leaveBtn: document.querySelector('#leaveRoom'),
+  spectateBtn: document.querySelector('#spectateBtn'),
+  spectateView: document.querySelector('#spectateView'),
+  spectateCode: document.querySelector('#spectateCode'),
+  spectateExit: document.querySelector('#spectateExit'),
+  spectateReplayBtn: document.querySelector('#spectateReplayBtn'),
+  spectateStatusBar: document.querySelector('#spectateStatusBar'),
+  spectatePhase: document.querySelector('#spectatePhase'),
+  spectateClock: document.querySelector('#spectateClock'),
+  spectateCount: document.querySelector('#spectateCount'),
+  spectatePrompt: document.querySelector('#spectatePrompt'),
+  spectateMode: document.querySelector('#spectateMode'),
+  spectateSeats: document.querySelector('#spectateSeats'),
+  spectateChat: document.querySelector('#spectateChat'),
+  spectateFeed: document.querySelector('#spectateFeed'),
+  replayView: document.querySelector('#replayView'),
+  replayCode: document.querySelector('#replayCode'),
+  replayBack: document.querySelector('#replayBack'),
+  replayWinner: document.querySelector('#replayWinner'),
+  replayMeta: document.querySelector('#replayMeta'),
+  replayPlayers: document.querySelector('#replayPlayers'),
+  replayTimeline: document.querySelector('#replayTimeline'),
+  replayLog: document.querySelector('#replayLog'),
+  replayFilters: document.querySelector('#replayFilters'),
   toast: document.querySelector('#toast'),
 };
 
@@ -189,6 +226,12 @@ let profile = null;
 let authBusy = false;
 let pendingTimer = null;
 let approvedRouted = false;
+let spectate = null;
+let spectateTimer = null;
+let spectateBusy = false;
+let replayData = null;
+let replayFilter = 'all';
+let historyRows = [];
 
 let toastTimer;
 function toast(message) {
@@ -226,16 +269,40 @@ function setBusy(value) {
   els.joinBtn.disabled = value || !accountApproved();
 }
 
+function closeAccountMenu() {
+  if (els.accountMenu) els.accountMenu.hidden = true;
+}
+
+function openAuthModal() {
+  closeAccountMenu();
+  if (els.authModal) els.authModal.hidden = false;
+}
+
+function closeAuthModal() {
+  if (els.authModal) els.authModal.hidden = true;
+}
+
 function showRoom() {
   els.homeView.hidden = true;
   els.roomView.hidden = false;
+  els.spectateView.hidden = true;
+  els.replayView.hidden = true;
+  closeAccountMenu();
 }
 
 function showHome() {
   els.roomView.hidden = true;
   els.homeView.hidden = false;
+  els.spectateView.hidden = true;
+  els.replayView.hidden = true;
+  stopSpectate();
+  spectate = null;
+  closeAccountMenu();
   updateHomeRoomCard();
-  if (client && accountApproved()) loadLeaderboard();
+  if (client && accountApproved()) {
+    loadLeaderboard();
+    loadHistory();
+  }
 }
 
 function updateHomeRoomCard() {
@@ -246,7 +313,6 @@ function updateHomeRoomCard() {
   els.heroStart.textContent = inRoom ? '返回当前对局' : '开始游戏';
   const navStart = document.querySelector('.navbar a[href="#start"]');
   if (navStart) navStart.textContent = inRoom ? '当前对局' : '开始游戏';
-  els.lobbyBtn.hidden = !(inRoom && isAdminAccount());
   if (!inRoom) return;
   els.activeRoomCode.textContent = session.code;
   els.activeRoomNote.textContent = isHost()
@@ -353,10 +419,22 @@ function applyAccountUI() {
   els.accountBar.hidden = !has;
   els.pendingCard.hidden = true;
   els.leaderboardCard.hidden = !approved;
+  els.historyCard.hidden = !approved;
   els.adminCard.hidden = !(approved && isAdminAccount());
   els.createBtn.disabled = busy || !approved;
   els.joinBtn.disabled = busy || !approved;
+
+  els.accountBtn.textContent = has ? `${profile.username} ▾` : '登录 / 注册';
+  els.accountTopName.textContent = has ? profile.username : '游客';
+  els.accountTopRole.textContent = has ? roleLabel(profile.role) : '未登录';
+  els.accountTopRole.className = `badge ${has ? roleBadgeClass(profile.role) : 'badge-secondary'}`;
+  els.accountRefreshBtn.hidden = !has || approved;
+  els.accountAdminBtn.hidden = !(has && approved && isAdminAccount());
+  els.accountLogoutBtn.hidden = !has;
+
   if (!has) {
+    els.accountTopNote.textContent = '登录后创建或加入房间';
+    closeAccountMenu();
     els.nameInput.value = '';
     els.accountNote.textContent = '';
     updateHomeRoomCard();
@@ -370,6 +448,9 @@ function applyAccountUI() {
     ? ''
     : profile.status === 'banned' ? '账号已被封禁'
       : profile.status === 'rejected' ? '账号未通过审核' : '账号待审核';
+  els.accountTopNote.textContent = approved
+    ? `状态：已通过${isOwnerAccount() ? ' · 站长' : ''}`
+    : els.accountNote.textContent;
   if (approved) {
     els.nameInput.value = profile.username;
     updateHomeRoomCard();
@@ -392,12 +473,14 @@ function showAuthScreen() {
   approvedRouted = false;
   stopPendingPoll();
   applyAccountUI();
+  openAuthModal();
 }
 
 function showAuthProblem(title, text) {
   profile = null;
   approvedRouted = false;
   stopPendingPoll();
+  applyAccountUI();
   els.authForms.hidden = true;
   els.accountBar.hidden = false;
   els.accountName.textContent = '—';
@@ -422,7 +505,9 @@ async function afterApproved() {
   els.regPass2.value = '';
   setAuthNote('');
   setStatus(`已登录：${profile.username}（${roleLabel(profile.role)}）`);
+  closeAuthModal();
   loadLeaderboard();
+  loadHistory();
   try {
     await restoreSession();
   } catch {
@@ -1192,6 +1277,557 @@ function renderLeaderboard(failed = false) {
   els.leaderboardBody.replaceChildren(frag);
 }
 
+// ---------- 历史对局回放 ----------
+function winnerTextFor(winner) {
+  return winner === 'wolf' ? '狼人阵营获胜' : winner === 'lovers' ? '第三方阵营获胜' : '好人阵营获胜';
+}
+
+function formatWhen(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad2 = (n) => String(n).padStart(2, '0');
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+async function loadHistory() {
+  if (!client || !accountApproved()) return;
+  els.historyNote.textContent = '加载中…';
+  const { data, error } = await client
+    .from('replays')
+    .select('id, room_code, mode_name, winner, days, finished_at')
+    .order('finished_at', { ascending: false })
+    .limit(20);
+  if (error) {
+    historyRows = [];
+    renderHistory(true);
+    return;
+  }
+  historyRows = data || [];
+  renderHistory();
+}
+
+function renderHistory(failed = false) {
+  const frag = document.createDocumentFragment();
+  const emptyRow = (text) => {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 5;
+    td.className = 'text-center text-muted py-3';
+    td.textContent = text;
+    tr.append(td);
+    return tr;
+  };
+  if (failed) {
+    els.historyNote.textContent = '还没有回放表：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
+    frag.append(emptyRow('历史对局暂不可用'));
+    els.historyBody.replaceChildren(frag);
+    return;
+  }
+  if (!historyRows.length) {
+    els.historyNote.textContent = '打完一局后房主会自动保存回放（含全部讨论）';
+    frag.append(emptyRow('还没有对局记录'));
+    els.historyBody.replaceChildren(frag);
+    return;
+  }
+  els.historyNote.textContent = `最近 ${historyRows.length} 局 · 回放包含全部发言和狼人夜间讨论`;
+  historyRows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const when = document.createElement('td');
+    when.className = 'text-nowrap';
+    when.textContent = formatWhen(row.finished_at);
+    const mode = document.createElement('td');
+    mode.textContent = row.mode_name || '—';
+    const winner = document.createElement('td');
+    winner.textContent = winnerTextFor(row.winner);
+    const days = document.createElement('td');
+    days.className = 'text-right';
+    days.textContent = row.days || '—';
+    const action = document.createElement('td');
+    action.className = 'text-right';
+    action.append(makeBtn('查看', 'btn-outline-primary', () => {
+      openReplay(row.id).catch((error) => toast(friendlyError(error)));
+    }));
+    tr.append(when, mode, winner, days, action);
+    frag.append(tr);
+  });
+  els.historyBody.replaceChildren(frag);
+}
+
+function showReplayView() {
+  els.homeView.hidden = true;
+  els.roomView.hidden = true;
+  els.spectateView.hidden = true;
+  els.replayView.hidden = false;
+  closeAccountMenu();
+  window.scrollTo(0, 0);
+}
+
+async function openReplay(id) {
+  if (!guardClient()) return;
+  const { data, error } = await client.from('replays').select('*').eq('id', id).maybeSingle();
+  if (error) {
+    toast(friendlyError(error));
+    return;
+  }
+  if (!data) {
+    toast('这条回放不存在了');
+    return;
+  }
+  replayData = data;
+  replayFilter = 'all';
+  stopSpectate();
+  spectate = null;
+  showReplayView();
+  renderReplay();
+}
+
+async function openLatestReplay(code) {
+  if (!guardClient()) return;
+  const { data, error } = await client
+    .from('replays')
+    .select('id')
+    .eq('room_code', code)
+    .order('finished_at', { ascending: false })
+    .limit(1);
+  if (error) {
+    toast(friendlyError(error));
+    return;
+  }
+  const row = (data || [])[0];
+  if (!row) {
+    toast('回放还没生成（需房主在线结算）或数据库未升级');
+    return;
+  }
+  await openReplay(row.id);
+}
+
+function replaySeatText(seat, name) {
+  if (seat == null) return name || '—';
+  return `${pad(seat)} 号${name ? ` · ${name}` : ''}`;
+}
+
+function renderReplay() {
+  const data = replayData;
+  if (!data) return;
+  els.replayCode.textContent = data.room_code || '------';
+  els.replayWinner.className = `sr-winner ${data.winner === 'wolf' ? 'sr-winner-wolf' : data.winner === 'lovers' ? 'sr-winner-lovers' : ''}`.trim();
+  els.replayWinner.textContent = `${winnerTextFor(data.winner)} · ${data.win_reason || ''}`;
+  const events = data.events || [];
+  const talkCount = events.filter((ev) => ev.t === 'chat' || ev.t === 'wolfchat').length;
+  els.replayMeta.textContent = [
+    `板子：${data.mode_name || data.mode || '未知'}`,
+    `共 ${data.days || 0} 天`,
+    `结束于 ${formatWhen(data.finished_at)}`,
+    data.rating?.k ? `评分 K=${data.rating.k}` : '',
+    `讨论 ${talkCount} 条（含狼人频道）`,
+  ].filter(Boolean).join(' · ');
+  renderReplayPlayers();
+  renderReplayLog();
+  renderReplayTimeline();
+  els.replayFilters.querySelectorAll('button').forEach((btn) => {
+    btn.classList.toggle('btn-dark', btn.dataset.filter === replayFilter);
+    btn.classList.toggle('btn-outline-dark', btn.dataset.filter !== replayFilter);
+  });
+}
+
+function renderReplayPlayers() {
+  const data = replayData;
+  const players = (data.players || []).slice().sort((a, b) => (a.seat || 99) - (b.seat || 99));
+  const detail = new Map((data.rating?.players || []).map((item) => [item.seat, item]));
+  const frag = document.createDocumentFragment();
+  players.forEach((player) => {
+    const tr = document.createElement('tr');
+    const seatTd = document.createElement('td');
+    seatTd.textContent = player.seat ? pad(player.seat) : '—';
+    const nameTd = document.createElement('td');
+    nameTd.textContent = player.name || '';
+    if (player.is_bot) {
+      const bot = document.createElement('span');
+      bot.className = 'badge badge-info ml-2';
+      bot.textContent = '人机';
+      nameTd.append(bot);
+    }
+    const roleTd = document.createElement('td');
+    const role = ROLES[player.role];
+    if (role) {
+      const tag = document.createElement('span');
+      tag.className = `sr-tag ${CAMPS[role.camp]?.tag || ''}`;
+      tag.textContent = role.name;
+      roleTd.append(tag);
+    } else {
+      roleTd.textContent = '—';
+    }
+    const deathTd = document.createElement('td');
+    deathTd.className = 'text-muted';
+    if (player.kicked) {
+      deathTd.textContent = '被站长请离';
+    } else if (player.death) {
+      deathTd.textContent = `第 ${player.death.day} 天 · ${DEATH_SHORT[player.death.reason] || ''}`.trim();
+    } else {
+      deathTd.textContent = '存活到最后';
+    }
+    const ratingTd = document.createElement('td');
+    ratingTd.className = 'text-right';
+    const item = detail.get(player.seat);
+    if (player.is_bot) {
+      ratingTd.className = 'text-right text-muted';
+      ratingTd.textContent = '人机不计分';
+    } else if (item) {
+      ratingTd.className = `text-right ${item.delta >= 0 ? 'sr-delta-up' : 'sr-delta-down'}`;
+      ratingTd.textContent = `${item.before} → ${item.after}（${item.delta >= 0 ? '+' : ''}${item.delta}）`;
+    } else {
+      ratingTd.textContent = '—';
+    }
+    tr.append(seatTd, nameTd, roleTd, deathTd, ratingTd);
+    frag.append(tr);
+  });
+  els.replayPlayers.replaceChildren(frag);
+}
+
+function renderReplayLog() {
+  const entries = replayData?.log || [];
+  const frag = document.createDocumentFragment();
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'text-muted small';
+    empty.textContent = '没有流程记录';
+    frag.append(empty);
+  }
+  entries.forEach((entry) => {
+    const line = document.createElement('div');
+    line.className = `sr-sys${entry.kind && entry.kind !== 'system' ? ` sr-sys-${entry.kind}` : ''}`;
+    line.textContent = entry.text;
+    frag.append(line);
+  });
+  els.replayLog.replaceChildren(frag);
+}
+
+function replayEventMatches(ev) {
+  if (replayFilter === 'all') return true;
+  if (replayFilter === 'vote') return ev.t === 'vote';
+  return ev.t === replayFilter;
+}
+
+function replayNightText(ev) {
+  const who = replaySeatText(ev.seat);
+  const target = ev.target != null && ev.target > 0 ? `${pad(ev.target)} 号` : null;
+  const payload = ev.payload || {};
+  switch (ev.step) {
+    case 'thief': return '盗贼换牌（底牌已选）';
+    case 'cupid': return `丘比特连线：${payload.a ? `${pad(payload.a)} 号` : '?'} 与 ${payload.b ? `${pad(payload.b)} 号` : '?'}`;
+    case 'guard': return `守卫 ${who} 守护 ${target || '（无）'}`;
+    case 'wolves': return `狼人 ${who} 刀 ${target || '空刀'}`;
+    case 'wolfbeauty': return `狼美人 ${who} 魅惑 ${target || '（无）'}`;
+    case 'witch': {
+      const parts = [];
+      if (payload.save) parts.push('使用解药');
+      if (payload.poison) parts.push(`毒 ${pad(payload.poison)} 号`);
+      return `女巫 ${who} ${parts.length ? parts.join('，') : '没有用药'}`;
+    }
+    case 'seer': return `预言家 ${who} 查验 ${target || '（无）'}`;
+    default: return `${STEP_LABEL[ev.step] || '夜间行动'}：${who}${target ? ` → ${target}` : ''}`;
+  }
+}
+
+function replayEventNode(ev) {
+  const line = document.createElement('div');
+  const dayChip = document.createElement('span');
+  dayChip.className = 'sr-ev-day';
+  dayChip.textContent = ev.t === 'night' ? `第${ev.day}夜` : `第${ev.day}天`;
+  let cls = 'sr-ev';
+  let text = '';
+  if (ev.t === 'chat') {
+    text = `${replaySeatText(ev.seat, ev.name)}：${ev.text}`;
+  } else if (ev.t === 'wolfchat') {
+    cls += ' sr-ev-wolf';
+    text = `狼人频道 · ${replaySeatText(ev.seat, ev.name)}：${ev.text}`;
+  } else if (ev.t === 'night') {
+    cls += ' sr-ev-night';
+    text = replayNightText(ev);
+  } else if (ev.t === 'vote') {
+    cls += ' sr-ev-vote';
+    const target = ev.target != null && ev.target > 0 ? `${pad(ev.target)} 号` : '弃权';
+    text = `${ev.step === 'runoff' ? 'PK 投票' : '投票'}：${replaySeatText(ev.seat)} → ${target}`;
+  } else if (ev.t === 'speech') {
+    cls += ' sr-ev-muted';
+    text = `${replaySeatText(ev.seat)} 结束发言`;
+  } else if (ev.t === 'explode') {
+    cls += ' sr-ev-warn';
+    text = `${replaySeatText(ev.seat)} 自爆${ev.target ? `，带走 ${pad(ev.target)} 号` : ''}`;
+  } else if (ev.t === 'kick') {
+    cls += ' sr-ev-warn';
+    text = `站长把 ${replaySeatText(ev.target)} 请出了房间`;
+  } else {
+    cls += ' sr-ev-muted';
+    text = replaySeatText(ev.seat);
+  }
+  line.className = cls;
+  line.append(dayChip, document.createTextNode(text));
+  return line;
+}
+
+function renderReplayTimeline() {
+  const events = (replayData?.events || []).filter(replayEventMatches);
+  const frag = document.createDocumentFragment();
+  if (!events.length) {
+    const empty = document.createElement('div');
+    empty.className = 'text-muted small';
+    empty.textContent = replayFilter === 'all' ? '没有记录' : '这个分类没有记录';
+    frag.append(empty);
+  }
+  events.forEach((ev) => frag.append(replayEventNode(ev)));
+  els.replayTimeline.replaceChildren(frag);
+  els.replayTimeline.scrollTop = 0;
+}
+
+// ---------- 旁观进行中的对局 ----------
+async function openSpectate(code) {
+  if (!guardClient()) return;
+  if (session) {
+    toast('你正在房间里，先点「离开房间」再旁观别的对局');
+    return;
+  }
+  if (!accountApproved()) {
+    toast('先登录并等待账号审核通过');
+    openAuthModal();
+    return;
+  }
+  if (!/^\d{6}$/.test(code)) {
+    toast('请输入 6 位数字房间码');
+    return;
+  }
+  if (spectateBusy) return;
+  spectateBusy = true;
+  try {
+    const { data, error } = await client
+      .from('rooms')
+      .select('code, options')
+      .eq('code', code)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('房间不存在，检查一下房间码');
+    if (!data.options?.g) throw new Error('这局还没开始，想玩就直接加入房间吧');
+    spectate = { code, room: data, g: data.options.g, members: [], chatRows: [] };
+    showSpectateView();
+    await spectateLoad();
+    startSpectatePoll();
+  } catch (error) {
+    toast(friendlyError(error));
+    stopSpectate();
+    spectate = null;
+    showHome();
+  } finally {
+    spectateBusy = false;
+  }
+}
+
+async function spectateLoad() {
+  if (!spectate || !client) return;
+  const code = spectate.code;
+  const { data: roomRow, error: roomError } = await client
+    .from('rooms')
+    .select('code, options')
+    .eq('code', code)
+    .maybeSingle();
+  if (!spectate) return;
+  if (roomError) throw roomError;
+  if (!roomRow || !roomRow.options?.g) {
+    toast('这局已经结束或被关闭');
+    exitSpectate();
+    return;
+  }
+  const { data: rows, error: rowsError } = await client
+    .from('players')
+    .select('id, name, seat, alive, is_bot')
+    .eq('room_code', code)
+    .order('joined_at', { ascending: true });
+  if (!spectate) return;
+  if (rowsError) throw rowsError;
+  const { data: chats, error: chatError } = await client
+    .from('game_actions')
+    .select('day, step, payload, created_at')
+    .eq('room_code', code)
+    .eq('step', 'chat')
+    .order('created_at', { ascending: true })
+    .limit(500);
+  if (!spectate) return;
+  if (chatError) throw chatError;
+  spectate.room = roomRow;
+  spectate.g = roomRow.options.g;
+  spectate.members = rows || [];
+  spectate.chatRows = chats || [];
+  renderSpectate();
+}
+
+function startSpectatePoll() {
+  stopSpectate();
+  spectateTimer = setInterval(() => {
+    spectateLoad().catch(() => {});
+  }, 2000);
+}
+
+function stopSpectate() {
+  if (spectateTimer) {
+    clearInterval(spectateTimer);
+    spectateTimer = null;
+  }
+}
+
+function exitSpectate() {
+  stopSpectate();
+  spectate = null;
+  showHome();
+}
+
+function showSpectateView() {
+  els.homeView.hidden = true;
+  els.roomView.hidden = true;
+  els.replayView.hidden = true;
+  els.spectateView.hidden = false;
+  closeAccountMenu();
+  window.scrollTo(0, 0);
+}
+
+function spectatePromptText(state) {
+  if (state.phase === 'finished') return '对局已结束。点右上角「查看完整回放」查看含狼人夜聊的完整记录（需房主已保存）。';
+  if (state.phase === 'night') return '夜晚行动中，具体行动保密。';
+  if (state.phase === 'day') {
+    const order = state.speechOrder || [];
+    const speaker = order[state.speechIndex] ?? null;
+    if (speaker == null) return '发言结束，马上进入投票…';
+    return `${order.length > 1 ? `发言顺序：${order.map(pad).join(' → ')}。` : ''}当前 ${pad(speaker)} 号发言（第 ${state.speechIndex + 1} / ${order.length} 位）。`;
+  }
+  if (state.phase === 'vote' || state.phase === 'runoff') return '投票中，结果在本轮结束后公布。';
+  if (state.phase === 'hunter') return '猎人正在选择开枪目标…';
+  if (state.phase === 'dawn') return '天亮了，等待公布昨夜结果…';
+  return '';
+}
+
+function renderSpectate() {
+  const state = spectate?.g;
+  if (!state) return;
+  const mode = modeById(state.mode || spectate.room?.options?.mode || 'std12');
+  const total = mode.roles.length;
+  els.spectateCode.textContent = spectate.code;
+  els.spectatePhase.textContent = phaseTextOf(state);
+  els.spectateStatusBar.classList.toggle('sr-night', state.phase === 'night');
+  els.spectateStatusBar.classList.toggle('sr-over', state.phase === 'finished');
+  els.spectateCount.textContent = `${(state.aliveSeats || []).length} / ${total} 存活`;
+  els.spectateMode.textContent = `${mode.name} · ${total} 人`;
+  els.spectatePrompt.textContent = spectatePromptText(state);
+  els.spectateReplayBtn.hidden = state.phase !== 'finished';
+  updateSpectateClock();
+  renderSpectateSeats(state, mode);
+  renderSpectateChat();
+  renderSpectateFeed();
+}
+
+function renderSpectateSeats(state, mode) {
+  const total = mode.roles.length;
+  const bySeat = new Map();
+  spectate.members.forEach((member) => {
+    if (member.seat) bySeat.set(member.seat, member);
+  });
+  const alive = new Set(state.aliveSeats || []);
+  const speaker = state.phase === 'day' ? (state.speechOrder?.[state.speechIndex] ?? null) : null;
+  const frag = document.createDocumentFragment();
+  for (let seat = 1; seat <= total; seat += 1) {
+    const member = bySeat.get(seat);
+    const li = document.createElement('li');
+    li.className = 'sr-seat';
+    const head = document.createElement('div');
+    head.className = 'sr-seat-head';
+    const num = document.createElement('span');
+    num.className = 'sr-num';
+    num.textContent = pad(seat);
+    head.append(num);
+    const avatar = document.createElement('div');
+    avatar.className = 'sr-avatar';
+    const name = document.createElement('span');
+    name.className = 'sr-name';
+    const marks = document.createElement('div');
+    marks.className = 'sr-marks';
+    if (!member) {
+      li.classList.add('sr-seat-empty');
+      avatar.textContent = '·';
+      name.textContent = '空座';
+    } else {
+      if (!alive.has(seat)) li.classList.add('sr-dead');
+      if (speaker === seat) li.classList.add('sr-speaking');
+      avatar.textContent = (member.name || '?').trim().charAt(0).toUpperCase();
+      name.textContent = member.name;
+      if (member.is_bot) {
+        const bot = document.createElement('span');
+        bot.className = 'badge badge-info';
+        bot.textContent = '人机';
+        marks.append(bot);
+      }
+      if ((state.kicked || []).includes(seat)) {
+        const kicked = document.createElement('span');
+        kicked.className = 'badge badge-danger';
+        kicked.textContent = '已请离';
+        marks.append(kicked);
+      } else if (!alive.has(seat)) {
+        const out = document.createElement('span');
+        out.className = 'badge badge-secondary';
+        out.textContent = '出局';
+        marks.append(out);
+      }
+    }
+    li.append(head, avatar, name, marks);
+    frag.append(li);
+  }
+  els.spectateSeats.replaceChildren(frag);
+}
+
+function renderSpectateChat() {
+  const frag = document.createDocumentFragment();
+  if (!spectate?.chatRows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'text-muted small';
+    empty.textContent = '还没有公开发言';
+    frag.append(empty);
+  }
+  (spectate?.chatRows || []).forEach((row) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'sr-chat-msg';
+    const who = document.createElement('span');
+    who.className = 'sr-chat-who';
+    who.textContent = `第${row.day}天 · ${row.payload?.name || '玩家'}`;
+    const text = document.createElement('span');
+    text.className = 'sr-chat-text';
+    text.textContent = row.payload?.text || '';
+    wrap.append(who, text);
+    frag.append(wrap);
+  });
+  els.spectateChat.replaceChildren(frag);
+  els.spectateChat.scrollTop = els.spectateChat.scrollHeight;
+}
+
+function renderSpectateFeed() {
+  const entries = (spectate?.g?.log || []).slice(-120);
+  const frag = document.createDocumentFragment();
+  entries.forEach((entry) => {
+    const line = document.createElement('div');
+    line.className = `sr-sys${entry.kind && entry.kind !== 'system' ? ` sr-sys-${entry.kind}` : ''}`;
+    line.textContent = entry.text;
+    frag.append(line);
+  });
+  els.spectateFeed.replaceChildren(frag);
+  els.spectateFeed.scrollTop = els.spectateFeed.scrollHeight;
+}
+
+function updateSpectateClock() {
+  const state = spectate?.g;
+  if (!els.spectateClock) return;
+  if (!state || !state.deadline || state.phase === 'finished') {
+    els.spectateClock.textContent = '';
+    return;
+  }
+  const left = Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
+  els.spectateClock.textContent = `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+}
+
 async function loadMyRole() {
   if (!session) return;
   const { data, error } = await client
@@ -1500,14 +2136,18 @@ function renderRoom() {
 }
 
 function phaseText() {
-  if (!g) return '等待玩家';
-  if (g.phase === 'finished') return '对局结束';
-  if (g.phase === 'night') return `第 ${g.day} 夜 · ${STEP_LABEL[g.step] || '夜晚'}`;
-  if (g.phase === 'dawn') return `第 ${g.day} 天 · 天亮了`;
-  if (g.phase === 'vote') return `第 ${g.day} 天 · 投票`;
-  if (g.phase === 'runoff') return `第 ${g.day} 天 · PK 投票`;
-  if (g.phase === 'hunter') return '猎人开枪';
-  return `第 ${g.day} 天 · 讨论`;
+  return phaseTextOf(g);
+}
+
+function phaseTextOf(state) {
+  if (!state) return '等待玩家';
+  if (state.phase === 'finished') return '对局结束';
+  if (state.phase === 'night') return `第 ${state.day} 夜 · ${STEP_LABEL[state.step] || '夜晚'}`;
+  if (state.phase === 'dawn') return `第 ${state.day} 天 · 天亮了`;
+  if (state.phase === 'vote') return `第 ${state.day} 天 · 投票`;
+  if (state.phase === 'runoff') return `第 ${state.day} 天 · PK 投票`;
+  if (state.phase === 'hunter') return '猎人开枪';
+  return `第 ${state.day} 天 · 讨论`;
 }
 
 function renderStatusPrompt(mode, inGame) {
@@ -1568,7 +2208,10 @@ function updateClock() {
   els.gameClock.textContent = `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
 }
 
-setInterval(updateClock, 500);
+setInterval(() => {
+  updateClock();
+  updateSpectateClock();
+}, 500);
 
 function renderSeats(mode, inGame) {
   const total = mode.roles.length;
@@ -2139,15 +2782,17 @@ function renderGameOver() {
   const show = Boolean(g && g.phase === 'finished');
   els.gameOverCard.hidden = !show;
   els.replayBtn.hidden = !(show && isHost());
+  els.watchReplayBtn.hidden = !show;
   if (!show) return;
 
   const winner = g.winner;
   const label = winner === 'wolf' ? '狼人阵营获胜' : winner === 'lovers' ? '第三方阵营获胜' : '好人阵营获胜';
   els.winnerText.className = `sr-winner ${winner === 'wolf' ? 'sr-winner-wolf' : winner === 'lovers' ? 'sr-winner-lovers' : ''}`.trim();
   els.winnerText.textContent = `${label} · ${g.winReason || ''}`;
-  els.resultNote.textContent = g.rating
+  els.resultNote.textContent = (g.rating
     ? `共 ${g.day} 天 · 评分 K=${g.rating.k} · 按昵称永久保存，零和结算`
-    : `共 ${g.day} 天 · 评分未结算（房主需运行 supabase/migration-v4.sql）`;
+    : `共 ${g.day} 天 · 评分未结算（房主需运行 supabase/migration-v4.sql）`)
+    + (g.replayError ? ` · 回放未保存：${g.replayError}` : '');
 
   const detail = new Map((g.rating?.players || []).map((item) => [item.seat, item]));
   const rows = (allRoles.length ? allRoles : members).slice();
@@ -2900,6 +3545,65 @@ async function applyRatings() {
   calc.forEach((player) => ratings.set(player.name, player.after));
 }
 
+async function saveReplay() {
+  if (!g || !session || g.replaySaved) return;
+  const mode = currentMode();
+  try {
+    const { data, error } = await client
+      .from('game_actions')
+      .select('day, step, player_id, target_seat, payload, created_at')
+      .eq('room_code', session.code)
+      .order('created_at', { ascending: true })
+      .limit(3000);
+    if (error) throw error;
+    const seatOf = new Map(hostRoles.map((row) => [row.id, row.seat]));
+    const events = [];
+    (data || []).forEach((row) => {
+      const seat = seatOf.get(row.player_id) ?? null;
+      const payload = row.payload || {};
+      if (payload.explode) {
+        events.push({ t: 'explode', day: row.day, seat, target: payload.target ?? null, at: row.created_at });
+      } else if (row.step === 'chat') {
+        events.push({ t: 'chat', day: row.day, seat, name: payload.name || '', text: payload.text || '', at: row.created_at });
+      } else if (row.step === 'wolfchat') {
+        events.push({ t: 'wolfchat', day: row.day, seat, name: payload.name || '', text: payload.text || '', at: row.created_at });
+      } else if (row.step === 'speech') {
+        events.push({ t: 'speech', day: row.day, seat, at: row.created_at });
+      } else if (row.step === 'vote' || row.step === 'runoff') {
+        events.push({ t: 'vote', day: row.day, step: row.step, seat, target: row.target_seat, at: row.created_at });
+      } else if (row.step === 'kick') {
+        events.push({ t: 'kick', day: row.day, seat, target: row.target_seat, at: row.created_at });
+      } else {
+        events.push({ t: 'night', day: row.day, step: row.step, seat, target: row.target_seat, payload, at: row.created_at });
+      }
+    });
+    const players = hostRoles.map((row) => ({
+      seat: row.seat,
+      name: row.name,
+      role: row.role,
+      is_bot: Boolean(row.is_bot),
+      death: (g.deaths || []).filter((death) => death.seat === row.seat).slice(-1)[0] || null,
+      kicked: (g.kicked || []).includes(row.seat),
+    }));
+    const { error: insertError } = await client.from('replays').insert({
+      room_code: session.code,
+      mode: g.mode,
+      mode_name: mode.name,
+      winner: g.winner,
+      win_reason: g.winReason,
+      days: g.day,
+      players,
+      log: g.log,
+      events,
+      rating: g.rating || null,
+    });
+    if (insertError) throw insertError;
+    g.replaySaved = true;
+  } catch (error) {
+    g.replayError = friendlyError(error);
+  }
+}
+
 async function finishGame(winner, reason) {
   g.phase = 'finished';
   g.step = 'finished';
@@ -2914,6 +3618,7 @@ async function finishGame(winner, reason) {
   } catch (error) {
     toast(`评分结算失败：${friendlyError(error)}`);
   }
+  await saveReplay();
   await saveGame();
   await loadAllRoles();
   renderRoom();
@@ -3283,6 +3988,9 @@ function friendlyError(error) {
   if (/is_bot|profiles_status_check/i.test(message)) {
     return '数据库还没升级：先在 Supabase SQL Editor 运行 supabase/migration-v6.sql';
   }
+  if (/replays/i.test(message)) {
+    return '历史回放表还没建好：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
+  }
   if (/profiles|username_taken/i.test(message)) {
     return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
   }
@@ -3395,6 +4103,47 @@ els.replayBtn.addEventListener('click', () => {
   replayGame().catch((error) => toast(friendlyError(error)));
 });
 
+els.watchReplayBtn.addEventListener('click', () => {
+  if (session) openLatestReplay(session.code).catch((error) => toast(friendlyError(error)));
+});
+
+els.spectateBtn.addEventListener('click', () => {
+  const code = els.codeInput.value.trim();
+  openSpectate(code).catch((error) => toast(friendlyError(error)));
+});
+
+els.spectateExit.addEventListener('click', exitSpectate);
+
+els.spectateReplayBtn.addEventListener('click', () => {
+  if (spectate) openLatestReplay(spectate.code).catch((error) => toast(friendlyError(error)));
+});
+
+els.replayBack.addEventListener('click', () => {
+  replayData = null;
+  showHome();
+});
+
+els.historyRefresh.addEventListener('click', () => {
+  loadHistory();
+});
+
+els.replayFilters.addEventListener('click', (event) => {
+  const btn = event.target.closest('button[data-filter]');
+  if (!btn) return;
+  replayFilter = btn.dataset.filter;
+  renderReplayTimeline();
+  els.replayFilters.querySelectorAll('button').forEach((item) => {
+    item.classList.toggle('btn-dark', item.dataset.filter === replayFilter);
+    item.classList.toggle('btn-outline-dark', item.dataset.filter !== replayFilter);
+  });
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  closeAccountMenu();
+  if (els.authModal && !els.authModal.hidden && profile) closeAuthModal();
+});
+
 els.modeSelect.addEventListener('change', updateModeHint);
 
 document.querySelector('#heroStart').addEventListener('click', (event) => {
@@ -3404,7 +4153,7 @@ document.querySelector('#heroStart').addEventListener('click', (event) => {
     return;
   }
   if (!accountApproved()) {
-    els.authCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    openAuthModal();
     els.loginName.focus({ preventScroll: true });
     return;
   }
@@ -3419,18 +4168,54 @@ document.querySelector('.navbar a[href="#start"]').addEventListener('click', (ev
     return;
   }
   if (!accountApproved()) {
-    els.authCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    openAuthModal();
     return;
   }
   els.startCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
+document.querySelector('.navbar a[href="#historyCard"]').addEventListener('click', (event) => {
+  event.preventDefault();
+  if (session) showHome();
+  if (!accountApproved()) {
+    openAuthModal();
+    return;
+  }
+  loadHistory();
+  els.historyCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
 els.backToRoomBtn.addEventListener('click', backToRoom);
 
-els.lobbyBtn.addEventListener('click', () => {
-  showHome();
+els.accountBtn.addEventListener('click', () => {
+  if (!profile) {
+    openAuthModal();
+    return;
+  }
+  els.accountMenu.hidden = !els.accountMenu.hidden;
+});
+
+els.accountAdminBtn.addEventListener('click', () => {
+  closeAccountMenu();
+  if (session) showHome();
   if (isAdminAccount()) loadAdmin();
   els.adminCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+els.accountRefreshBtn.addEventListener('click', () => {
+  closeAccountMenu();
+  manualRefreshAccount();
+});
+
+document.addEventListener('click', (event) => {
+  if (!els.accountMenu || els.accountMenu.hidden) return;
+  if (els.accountBtn.contains(event.target) || els.accountMenu.contains(event.target)) return;
+  closeAccountMenu();
+});
+
+els.authClose.addEventListener('click', closeAuthModal);
+els.authModal.querySelectorAll('[data-auth-close]').forEach((node) => {
+  node.addEventListener('click', closeAuthModal);
 });
 
 els.authCard.querySelectorAll('[data-auth-tab]').forEach((btn) => {
@@ -3549,7 +4334,7 @@ els.adminRefresh.addEventListener('click', () => {
   loadAdmin();
 });
 
-els.logoutBtn.addEventListener('click', async () => {
+async function doLogout() {
   if (authBusy) return;
   if (session) {
     toast('对局进行中，先点「返回对局」继续；要退出请先结束或离开房间');
@@ -3570,6 +4355,12 @@ els.logoutBtn.addEventListener('click', async () => {
   } finally {
     authBusy = false;
   }
+}
+
+els.logoutBtn.addEventListener('click', doLogout);
+els.accountLogoutBtn.addEventListener('click', () => {
+  closeAccountMenu();
+  doLogout();
 });
 
 els.codeInput.addEventListener('input', () => {

@@ -380,6 +380,99 @@ body {
 
 .sr-rules li + li { margin-top: 0.35rem; }
 
+/* ---------- 右上角账号 / 个人中心 ---------- */
+.sr-account { position: relative; }
+
+.sr-account-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 1040;
+  width: 220px;
+  padding: 10px;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.sr-account-menu[hidden] { display: none; }
+.sr-account-head { margin-bottom: 8px; }
+.sr-account-menu .btn + .btn { margin-top: 6px; }
+
+/* ---------- 登录弹层 ---------- */
+.sr-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1060;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px 24px;
+  overflow-y: auto;
+}
+
+.sr-modal[hidden] { display: none; }
+
+.sr-modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.sr-modal-body {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+}
+
+.sr-modal-body .card { border-radius: 8px; }
+
+/* ---------- 历史对局 / 回放 ---------- */
+.sr-history-table th { white-space: nowrap; }
+.sr-history-table td { vertical-align: middle; }
+
+.sr-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sr-filters .btn { padding: 0.1rem 0.5rem; font-size: 78%; }
+
+.sr-replay-feed { height: 420px; }
+
+.sr-ev {
+  margin: 4px 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f1f3f5;
+  color: #495057;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.sr-ev-day {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 0.35em;
+  border-radius: 0.25em;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 78%;
+  font-weight: 600;
+}
+
+.sr-ev-wolf { background: #efe7fb; color: #3d2b6b; }
+.sr-ev-night { background: #1c2340; color: #e6e9ff; }
+.sr-ev-vote { background: #e9e4f7; color: #3d2b6b; }
+.sr-ev-warn { background: #fbe3e5; color: #8a1c26; }
+.sr-ev-muted { background: transparent; color: #6c757d; font-size: 88%; }
+.sr-ev-wolf .sr-ev-day,
+.sr-ev-night .sr-ev-day { background: rgba(255, 255, 255, 0.16); }
+
 /* ---------- 页脚 ---------- */
 .sr-footer {
   text-align: center;
@@ -396,7 +489,7 @@ body {
   position: fixed;
   left: 50%;
   bottom: 32px;
-  z-index: 1050;
+  z-index: 1080;
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
   padding: 8px 16px;

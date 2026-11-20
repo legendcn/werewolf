@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.11.0">
+  <link rel="stylesheet" href="styles.css?v=0.12.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -13,10 +13,23 @@
       <a class="navbar-brand" href="./">狼人杀</a>
       <ul class="navbar-nav mr-auto flex-row">
         <li class="nav-item"><a class="nav-link" href="#start">开始游戏</a></li>
+        <li class="nav-item"><a class="nav-link" href="#historyCard">历史对局</a></li>
         <li class="nav-item"><a class="nav-link" href="#rules">规则</a></li>
         <li class="nav-item d-none d-sm-block"><a class="nav-link" href="https://github.com/legendcn/werewolf">源码</a></li>
       </ul>
-      <span class="navbar-text small text-muted d-none d-sm-inline">在线版</span>
+      <div class="sr-account">
+        <button id="accountBtn" class="btn btn-sm btn-outline-dark" type="button">登录 / 注册</button>
+        <div id="accountMenu" class="sr-account-menu" hidden>
+          <div class="sr-account-head">
+            <strong id="accountTopName">未登录</strong>
+            <span id="accountTopRole" class="badge badge-secondary ml-1">游客</span>
+            <div id="accountTopNote" class="small text-muted mt-1">登录后创建或加入房间</div>
+          </div>
+          <button id="accountRefreshBtn" class="btn btn-sm btn-outline-secondary btn-block" type="button" hidden>刷新状态</button>
+          <button id="accountAdminBtn" class="btn btn-sm btn-outline-primary btn-block" type="button" hidden>账号管理</button>
+          <button id="accountLogoutBtn" class="btn btn-sm btn-outline-danger btn-block" type="button" hidden>退出登录</button>
+        </div>
+      </div>
     </div>
   </nav>
 
@@ -26,59 +39,6 @@
         <h1 class="h2 mb-2">狼人杀</h1>
         <p class="mb-3">好友组局 · <span class="sr-tag sr-tag-killer">8 种板子</span> <span class="sr-tag sr-tag-police">夜晚行动</span> <span class="sr-tag sr-tag-neutral">第三方阵营</span> <span class="sr-tag sr-tag-civilian">Elo 评分</span></p>
         <a class="btn btn-light btn-lg" href="#start" id="heroStart">开始游戏</a>
-      </div>
-
-      <div class="card mb-4" id="authCard">
-        <div class="card-header"><strong>账号</strong></div>
-        <div class="card-body">
-          <div id="authForms">
-            <ul class="nav nav-tabs mb-3">
-              <li class="nav-item"><button class="nav-link active" type="button" data-auth-tab="login">登录</button></li>
-              <li class="nav-item"><button class="nav-link" type="button" data-auth-tab="register">注册</button></li>
-            </ul>
-            <form id="loginForm" autocomplete="on">
-              <div class="form-row">
-                <div class="col-md-6 mb-3">
-                  <label class="small text-muted mb-1" for="loginName">用户名</label>
-                  <input id="loginName" class="form-control" maxlength="12" autocomplete="username">
-                </div>
-                <div class="col-md-6 mb-3">
-                  <label class="small text-muted mb-1" for="loginPass">密码</label>
-                  <input id="loginPass" class="form-control" type="password" maxlength="64" autocomplete="current-password">
-                </div>
-              </div>
-              <button class="btn btn-danger" type="submit">登录</button>
-              <small class="text-muted ml-2">密码由 Supabase 加密保存，站长也看不到明文。</small>
-            </form>
-            <form id="registerForm" autocomplete="on" hidden>
-              <div class="form-row">
-                <div class="col-md-4 mb-3">
-                  <label class="small text-muted mb-1" for="regName">用户名（2–12 字，注册后不可改）</label>
-                  <input id="regName" class="form-control" maxlength="12" autocomplete="username">
-                </div>
-                <div class="col-md-4 mb-3">
-                  <label class="small text-muted mb-1" for="regPass">密码（至少 6 位）</label>
-                  <input id="regPass" class="form-control" type="password" maxlength="64" autocomplete="new-password">
-                </div>
-                <div class="col-md-4 mb-3">
-                  <label class="small text-muted mb-1" for="regPass2">确认密码</label>
-                  <input id="regPass2" class="form-control" type="password" maxlength="64" autocomplete="new-password">
-                </div>
-              </div>
-              <button class="btn btn-danger" type="submit">注册</button>
-              <small class="text-muted ml-2">注册后需站长或管理员审核通过才能游玩；用户名 legendcn 为站长账号。</small>
-            </form>
-          </div>
-          <div id="accountBar" hidden>
-            <div class="d-flex flex-wrap align-items-center">
-              <div>当前账号：<strong id="accountName">–</strong> <span id="accountRole" class="badge badge-secondary">成员</span></div>
-              <button id="refreshStatus" class="btn btn-sm btn-outline-secondary ml-2" type="button" hidden>刷新状态</button>
-              <button id="logoutBtn" class="btn btn-sm btn-outline-secondary ml-auto" type="button">退出登录</button>
-            </div>
-            <div id="accountNote" class="small text-muted mt-1"></div>
-          </div>
-          <p id="authStatus" class="small text-muted mb-0 mt-3" hidden></p>
-        </div>
       </div>
 
       <div class="card mb-4" id="activeRoomCard" hidden>
@@ -127,6 +87,10 @@
               </form>
             </div>
           </div>
+          <div class="d-flex flex-wrap align-items-center mt-2">
+            <small class="text-muted mr-2">只想看？在左侧输入房间码后点</small>
+            <button id="spectateBtn" class="btn btn-sm btn-outline-secondary" type="button">旁观对局</button>
+          </div>
           <p id="status" class="text-muted small mb-0 mt-3">连接服务器中…</p>
         </div>
       </div>
@@ -143,7 +107,8 @@
                 <li><strong>自爆</strong>：普通狼人和白狼王在白天（含投票阶段）可以自爆，翻牌立即出局并跳过当天剩余流程、直接天黑；白狼王自爆还可以带走一人；<strong>狼美人不能自爆</strong>。</li>
                 <li>胜负按<strong>屠边</strong>：好人放逐所有狼人获胜；狼人杀光全部神职或全部平民获胜；人狼情侣组成第三方，需活到最后。</li>
                 <li><strong>评分</strong>：团队 Elo，初始 1500，按对手平均分计算期望胜率，同队同输赢，零和结算；6 / 9 / 12 人局 K 值分别为 32 / 28 / 24。</li>
-                <li><strong>站长特权</strong>：站长（legendcn）可以在座位旁「踢出」玩家，房间未满时可以「添加人机」占位（人机由程序行动、<strong>不会发言</strong>、不计分）；站长和管理员可以在大厅「账号管理」里封禁账号，<strong>只有站长能解封</strong>，管理员不能封禁站长。</li>
+                <li><strong>站长特权</strong>：站长（legendcn）可以在座位旁「踢出」玩家，房间未满时可以「添加人机」占位（人机由程序行动、<strong>不会发言</strong>、不计分）；站长和管理员可以在右上角「账号」菜单里封禁账号，<strong>只有站长能解封</strong>，管理员不能封禁站长。</li>
+                <li><strong>旁观与回放</strong>：在首页输入房间码点「旁观对局」，可以不加入只看公开信息（白天发言、流程记录，看不到身份和狼人夜聊）；每局结束后房主会把完整回放存进「历史对局」，<strong>包括狼人夜间讨论</strong>，审核通过的账号都能查看。</li>
               </ol>
             </div>
           </div>
@@ -171,6 +136,25 @@
               </table>
             </div>
           </div>
+          <div class="card mb-4" id="historyCard">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>历史对局</strong>
+              <button id="historyRefresh" class="btn btn-sm btn-outline-secondary" type="button">刷新</button>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0 sr-history-table">
+                <thead>
+                  <tr><th>时间</th><th>板子</th><th>胜方</th><th class="text-right">天数</th><th></th></tr>
+                </thead>
+                <tbody id="historyBody">
+                  <tr><td colspan="5" class="text-center text-muted py-3">加载中…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="card-body py-2">
+              <small id="historyNote" class="text-muted">回放包含全部发言和狼人夜间讨论</small>
+            </div>
+          </div>
           <div class="card mb-4">
             <div class="card-header"><strong>房间须知</strong></div>
             <div class="table-responsive">
@@ -184,6 +168,7 @@
                   <tr><th scope="row">网络</th><td>大陆访问需加速器</td></tr>
                   <tr><th scope="row">掉线</th><td>离线玩家的夜晚行动、发言自动跳过，投票按弃权；回来刷新即可继续</td></tr>
                   <tr><th scope="row">人机</th><td>站长可添加，由程序行动、不会发言、不参与评分；站长可以把座位上的玩家踢出</td></tr>
+                  <tr><th scope="row">旁观/回放</th><td>输入房间码可旁观进行中的对局（仅公开信息）；结束后的完整回放存在「历史对局」</td></tr>
                   <tr><th scope="row">多标签</th><td>会被视为同一人，测试请用无痕窗口</td></tr>
                 </tbody>
               </table>
@@ -215,7 +200,6 @@
         <h1 class="h3 mb-0">狼人杀 · 房间 <span id="roomCodeLabel" class="sr-code">------</span></h1>
         <div class="mt-2 mt-sm-0">
           <button id="copyCode" class="btn btn-sm btn-outline-secondary" type="button">复制房间码</button>
-          <button id="lobbyBtn" class="btn btn-sm btn-outline-primary ml-2" type="button" hidden>账号管理</button>
           <button id="leaveRoom" class="btn btn-sm btn-outline-danger ml-2" type="button">离开房间</button>
         </div>
       </div>
@@ -274,7 +258,10 @@
                   <tbody id="revealBody"></tbody>
                 </table>
               </div>
-              <button id="replayBtn" class="btn btn-danger mt-3" type="button" hidden>再来一局（房主）</button>
+              <div class="mt-3">
+                <button id="replayBtn" class="btn btn-danger" type="button" hidden>再来一局（房主）</button>
+                <button id="watchReplayBtn" class="btn btn-outline-dark ml-2" type="button">查看本局回放</button>
+              </div>
             </div>
           </div>
         </div>
@@ -309,18 +296,174 @@
         </div>
       </div>
     </section>
+
+    <section id="spectateView" class="view" hidden>
+      <div class="d-flex flex-wrap justify-content-between align-items-center mb-2">
+        <h1 class="h3 mb-0">旁观 · 房间 <span id="spectateCode" class="sr-code">------</span></h1>
+        <div class="mt-2 mt-sm-0">
+          <button id="spectateReplayBtn" class="btn btn-sm btn-outline-dark" type="button" hidden>查看完整回放</button>
+          <button id="spectateExit" class="btn btn-sm btn-outline-danger ml-2" type="button">返回大厅</button>
+        </div>
+      </div>
+
+      <div class="sr-status mb-3" id="spectateStatusBar">
+        <div class="sr-status-main">
+          <span class="sr-phase" id="spectatePhase">载入中…</span>
+          <span class="sr-clock" id="spectateClock"></span>
+          <span class="sr-clock" id="spectateCount">–</span>
+        </div>
+        <div class="sr-prompt" id="spectatePrompt"></div>
+      </div>
+
+      <p class="small text-muted">旁观只显示公开信息：座位、白天发言、投票结果和流程记录；身份与狼人夜间讨论要等本局结束后在「历史对局」查看。</p>
+
+      <div class="row">
+        <div class="col-lg-7 mb-3">
+          <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>座位</strong>
+              <span id="spectateMode" class="text-muted small">—</span>
+            </div>
+            <div class="card-body">
+              <ul id="spectateSeats" class="sr-seats"></ul>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><strong>本局公开发言</strong></div>
+            <div class="card-body p-2">
+              <div class="sr-feed sr-chat-feed" id="spectateChat"></div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-5 mb-3">
+          <div class="card">
+            <div class="card-header"><strong>对局记录</strong></div>
+            <div class="card-body p-2 sr-feed" id="spectateFeed"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="replayView" class="view" hidden>
+      <div class="d-flex flex-wrap justify-content-between align-items-center mb-2">
+        <h1 class="h3 mb-0">对局回放 · 房间 <span id="replayCode" class="sr-code">------</span></h1>
+        <div class="mt-2 mt-sm-0">
+          <button id="replayBack" class="btn btn-sm btn-outline-primary" type="button">返回大厅</button>
+        </div>
+      </div>
+
+      <div id="replayWinner" class="sr-winner mb-2"></div>
+      <p id="replayMeta" class="text-muted small mb-3"></p>
+
+      <div class="card mb-3">
+        <div class="card-header"><strong>全身份与出局</strong></div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr><th>座位</th><th>玩家</th><th>身份</th><th>出局</th><th class="text-right">评分变化</th></tr>
+            </thead>
+            <tbody id="replayPlayers"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-lg-7 mb-3">
+          <div class="card">
+            <div class="card-header d-flex flex-wrap justify-content-between align-items-center">
+              <strong>时间线（含全部讨论）</strong>
+              <div class="sr-filters" id="replayFilters">
+                <button class="btn btn-sm btn-dark" data-filter="all" type="button">全部</button>
+                <button class="btn btn-sm btn-outline-dark" data-filter="chat" type="button">发言</button>
+                <button class="btn btn-sm btn-outline-dark" data-filter="wolfchat" type="button">狼人频道</button>
+                <button class="btn btn-sm btn-outline-dark" data-filter="night" type="button">夜间</button>
+                <button class="btn btn-sm btn-outline-dark" data-filter="vote" type="button">投票</button>
+              </div>
+            </div>
+            <div class="card-body p-2 sr-feed sr-replay-feed" id="replayTimeline"></div>
+          </div>
+        </div>
+        <div class="col-lg-5 mb-3">
+          <div class="card">
+            <div class="card-header"><strong>流程记录</strong></div>
+            <div class="card-body p-2 sr-feed sr-replay-feed" id="replayLog"></div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <footer class="sr-footer container">
-    v0.11.0 · 60 秒发言 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.12.0 · 60 秒发言 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 旁观 / 历史回放 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
+
+  <div id="authModal" class="sr-modal" hidden>
+    <div class="sr-modal-mask" data-auth-close></div>
+    <div class="sr-modal-body" role="dialog" aria-modal="true" aria-label="登录或注册">
+      <div class="card" id="authCard">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>账号</strong>
+          <button id="authClose" class="close mb-0" type="button" aria-label="关闭"><span aria-hidden="true">×</span></button>
+        </div>
+        <div class="card-body">
+          <div id="authForms">
+            <ul class="nav nav-tabs mb-3">
+              <li class="nav-item"><button class="nav-link active" type="button" data-auth-tab="login">登录</button></li>
+              <li class="nav-item"><button class="nav-link" type="button" data-auth-tab="register">注册</button></li>
+            </ul>
+            <form id="loginForm" autocomplete="on">
+              <div class="form-row">
+                <div class="col-md-6 mb-3">
+                  <label class="small text-muted mb-1" for="loginName">用户名</label>
+                  <input id="loginName" class="form-control" maxlength="12" autocomplete="username">
+                </div>
+                <div class="col-md-6 mb-3">
+                  <label class="small text-muted mb-1" for="loginPass">密码</label>
+                  <input id="loginPass" class="form-control" type="password" maxlength="64" autocomplete="current-password">
+                </div>
+              </div>
+              <button class="btn btn-danger" type="submit">登录</button>
+              <small class="text-muted ml-2">密码由 Supabase 加密保存，站长也看不到明文。</small>
+            </form>
+            <form id="registerForm" autocomplete="on" hidden>
+              <div class="form-row">
+                <div class="col-md-4 mb-3">
+                  <label class="small text-muted mb-1" for="regName">用户名（2–12 字，注册后不可改）</label>
+                  <input id="regName" class="form-control" maxlength="12" autocomplete="username">
+                </div>
+                <div class="col-md-4 mb-3">
+                  <label class="small text-muted mb-1" for="regPass">密码（至少 6 位）</label>
+                  <input id="regPass" class="form-control" type="password" maxlength="64" autocomplete="new-password">
+                </div>
+                <div class="col-md-4 mb-3">
+                  <label class="small text-muted mb-1" for="regPass2">确认密码</label>
+                  <input id="regPass2" class="form-control" type="password" maxlength="64" autocomplete="new-password">
+                </div>
+              </div>
+              <button class="btn btn-danger" type="submit">注册</button>
+              <small class="text-muted ml-2">注册后需站长或管理员审核通过才能游玩；用户名 legendcn 为站长账号。</small>
+            </form>
+          </div>
+          <div id="accountBar" hidden>
+            <div class="d-flex flex-wrap align-items-center">
+              <div>当前账号：<strong id="accountName">–</strong> <span id="accountRole" class="badge badge-secondary">成员</span></div>
+              <button id="refreshStatus" class="btn btn-sm btn-outline-secondary ml-2" type="button" hidden>刷新状态</button>
+              <button id="logoutBtn" class="btn btn-sm btn-outline-secondary ml-auto" type="button">退出登录</button>
+            </div>
+            <div id="accountNote" class="small text-muted mt-1"></div>
+          </div>
+          <p id="authStatus" class="small text-muted mb-0 mt-3" hidden></p>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.11.0"></script>
-  <script src="js/modes.js?v=0.11.0"></script>
-  <script src="js/rules.js?v=0.11.0"></script>
-  <script src="js/app.js?v=0.11.0"></script>
+  <script src="js/config.js?v=0.12.0"></script>
+  <script src="js/modes.js?v=0.12.0"></script>
+  <script src="js/rules.js?v=0.12.0"></script>
+  <script src="js/app.js?v=0.12.0"></script>
 </body>
 </html>
