@@ -64,9 +64,9 @@ test('a wolf can explode immediately during voting, independently of its existin
   act(wolf, 'day', hunter.seat, { explode: true });
   ref.tick();
   assert.deepEqual(actions.map((a) => a.step), ['vote', 'explode']);
-  assert.deepEqual([g.phase, g.lastWordsSeat], ['lastwords', hunter.seat]);
-  act(hunter, 'lastwords', null, {end:true}); ref.tick();
+  // 自爆带走的人没有遗言，直接入夜。
   assert.equal(g.phase, 'night');
+  assert.equal(g.lastWordsSeat, null);
   assert.equal(g.day, 2);
   assert.equal(g.deadline - now(), 60_000);
   assert.ok(!g.aliveSeats.includes(hunter.seat));
@@ -99,11 +99,16 @@ for (const choice of ['conceal', 'reveal', 'shoot', 'timeout']) {
       act(hunter, 'hunter', choice === 'shoot' ? target : null, { reveal: choice !== 'conceal' });
     }
     ref.tick();
-    if (choice === 'shoot') {
-      const victim = roster.find(p => p.role === 'werewolf' && !p.alive);
-      assert.deepEqual([g.phase, g.lastWordsSeat], ['lastwords', victim.seat]);
-      act(victim, 'lastwords', null, {end:true}); ref.tick();
+    // 首夜死者（含猎人本人）按座位从小到大说遗言，然后才天亮。
+    const spoken = [];
+    while (g.phase === 'lastwords') {
+      spoken.push(g.lastWordsSeat);
+      act(roster.find((p) => p.seat === g.lastWordsSeat), 'lastwords', null, { end: true });
+      ref.tick();
     }
+    const victim = roster.find((p) => p.role === 'werewolf' && !p.alive);
+    const expected = (choice === 'shoot' ? [hunter.seat, victim.seat] : [hunter.seat]).sort((a, b) => a - b);
+    assert.deepEqual(spoken, expected);
     assert.equal(g.phase, 'dawn');
     assert.equal(g.deadline - now(), 6000);
     assert.equal(g.log.filter((e) => e.text.includes('天亮了')).length, 1);
@@ -123,6 +128,9 @@ test('a concealed hunter still settles a winning vote; poison does not open the 
   });
   for (const seat of g.aliveSeats) ref.record(seat, 'vote', hunter.seat);
   ref.tick();
+  assert.equal(g.phase, 'lastwords'); // 白天放逐先遗言
+  act(hunter, 'lastwords', null, { end: true });
+  ref.tick();
   assert.equal(g.phase, 'hunter');
   act(hunter, 'hunter', null, { reveal: false });
   ref.tick();
@@ -131,6 +139,11 @@ test('a concealed hunter still settles a winning vote; poison does not open the 
   const b = game(), victim = b.role('hunter');
   Object.assign(b.g, { step: 'seer', nightIndex: b.g.nightQueue.indexOf('seer'), poison: victim.seat });
   b.act(b.role('seer'), 'seer', victim.seat);
+  b.ref.tick();
+  // 首夜被毒有遗言，但毒杀不开枪。
+  assert.deepEqual([b.g.phase, b.g.lastWordsSeat], ['lastwords', victim.seat]);
+  assert.equal(b.g.hunterPending, null);
+  b.act(victim, 'lastwords', null, { end: true });
   b.ref.tick();
   assert.equal(b.g.phase, 'dawn');
 });

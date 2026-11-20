@@ -352,6 +352,15 @@ test('ordinary victim can acknowledge an actual settlement snapshot without a hu
   w.victim = victim;
   run(`g=view; myRow=victim; act=(step)=>window.clicked=step; renderActionPanel(null,true)`);
   const panel = w.document.querySelector('#actionArea');
+  // 白天被放逐者先说遗言，再确认出局。
+  assert.equal(panel.querySelectorAll('button').length, 1);
+  assert.match(panel.textContent, /说完了/);
+  panel.querySelector('button').click();
+  assert.equal(w.clicked, 'lastwords');
+  ref.record(victim.seat, 'lastwords', null, { end: true });
+  ref.tick();
+  w.view = project(ref.state, victim);
+  run(`g=view; submitted=new Set(); renderActionPanel(null,true)`);
   assert.equal(panel.querySelectorAll('button').length, 1);
   assert.match(panel.textContent, /确认出局/);
   panel.querySelector('button').click();

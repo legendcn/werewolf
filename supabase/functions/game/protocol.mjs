@@ -133,7 +133,8 @@ export function submit(engine, me, cmd, actions) {
     return;
   }
   if (['day', 'vote', 'runoff', 'explode'].includes(step) && payload.explode === true) {
-    check(['day', 'vote', 'runoff'].includes(g.phase) && ['werewolf', 'wolfking'].includes(me.role));
+    check(['day', 'vote', 'runoff', 'sheriff', 'order', 'lastwords'].includes(g.phase) &&
+      ['werewolf', 'wolfking'].includes(me.role));
     check(target === null || (me.role === 'wolfking' && alive(target) && target !== seat));
     engine.record(seat, 'explode', target, { explode: true, target });
     return;

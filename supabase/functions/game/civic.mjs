@@ -7,7 +7,7 @@ export function speechOrder(seats, start, dir) {
   return cycle.slice(i).concat(cycle.slice(0, i));
 }
 
-export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnline, tallyVotes, resume }) {
+export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnline, tallyVotes, resume, openConfirm }) {
   const log = (text) => state().log.push({ day: state().day, kind: 'system', text });
   function enter(phase, step = phase) {
     state().phase = phase;
@@ -106,20 +106,19 @@ export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnlin
         log('警徽作废');
       } else g.badgePending = seat;
     }
+    // 遗言规则：首夜死者有遗言（按座位从小到大）；第二夜起夜死无遗言；
+    // 白天放逐/技能连带有遗言；自爆、被白狼王带走、决斗、踢出/离开无遗言。
     if (
-      !['selfboom', 'kick', 'leave'].includes(reason) && !(when === 'night' && g.day === 1) &&
+      !['selfboom', 'kick', 'leave', 'duel', 'explode'].includes(reason) &&
+      (when === 'day' || g.day === 1) &&
       !isBotSeat(seat)
     ) {
       (g.lastWordsQueue ??= []).push(seat);
+      if (when === 'night') g.lastWordsQueue.sort((a, b) => a - b);
     }
   }
   function advance() {
     const g = state();
-    if (g.badgePending != null) {
-      enter('badge');
-      log(`${g.badgePending} 号处理警徽`);
-      return;
-    }
     while (g.lastWordsQueue?.length) {
       const seat = g.lastWordsQueue.shift();
       if (!isSeatOnline(seat)) {
@@ -129,6 +128,21 @@ export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnlin
       g.lastWordsSeat = seat;
       enter('lastwords');
       log(`${seat} 号发表遗言`);
+      return;
+    }
+    // 白天被放逐者先说遗言，再进入猎人/出局确认窗口开枪。
+    if (g.confirmAfterWords) {
+      const pending = g.confirmAfterWords;
+      delete g.confirmAfterWords;
+      // The window resumes whatever the whole words+confirm chain was heading to.
+      g.hunterResume = g.sceneResume;
+      delete g.sceneResume;
+      openConfirm(pending.seats, pending.when);
+      return;
+    }
+    if (g.badgePending != null) {
+      enter('badge');
+      log(`${g.badgePending} 号处理警徽`);
       return;
     }
     const next = g.sceneResume;

@@ -51,22 +51,12 @@ test('sheriff sets direction and casts 1.5 votes in both exile ballots', () => {
   }
 });
 
-test('hunter before badge before last words; only the speaker can post, and only until timeout', () => {
+test('last words before the hunter shot, then badge; only the speaker can post, and only until timeout', () => {
   const f = game(), hunter = f.role('hunter'), wolf = f.role('werewolf'), next = f.role('witch');
   Object.assign(f.g, { phase: 'vote', step: 'vote', sheriff: hunter.seat });
   for (const p of f.roster) f.act(p, 'vote', p === hunter ? -1 : hunter.seat);
   f.ref.tick();
-  assert.equal(project(f.g, null).phase, 'settling');
-  assert.ok(!('badgePending' in project(f.g, null)));
-  f.act(hunter, 'hunter', wolf.seat, { reveal: true });
-  f.ref.tick();
-  assert.equal(f.g.phase, 'badge');
-  assert.throws(() => f.act(wolf, 'badge', next.seat));
-  assert.throws(() => f.act(hunter, 'badge', wolf.seat));
-  f.act(hunter, 'badge', next.seat);
-  f.ref.tick();
-  assert.equal(f.g.sheriff, next.seat);
-  for (const p of [hunter, wolf]) {
+  const words = (p) => {
     assert.deepEqual([f.g.phase, project(f.g, null).lastWordsSeat], ['lastwords', p.seat]);
     assert.throws(() => f.act(next, 'chat', null, { text: '插话' }));
     f.act(p, 'chat', null, { text: '一' });
@@ -75,21 +65,31 @@ test('hunter before badge before last words; only the speaker can post, and only
     assert.throws(() => f.act(p, 'chat', null, { text: '迟到' }));
     f.ref.tick();
     assert.equal(f.g.bank[p.seat], 60000);
-  }
+  };
+  words(hunter); // 遗言结束才开确认窗口
+  assert.equal(project(f.g, null).phase, 'settling');
+  assert.ok(!('badgePending' in project(f.g, null)));
+  f.act(hunter, 'hunter', wolf.seat, { reveal: true });
+  f.ref.tick();
+  words(wolf); // 被带走者也有遗言，之后才处理警徽
+  assert.equal(f.g.phase, 'badge');
+  assert.throws(() => f.act(wolf, 'badge', next.seat));
+  assert.throws(() => f.act(hunter, 'badge', wolf.seat));
+  f.act(hunter, 'badge', next.seat);
+  f.ref.tick();
+  assert.equal(f.g.sheriff, next.seat);
   assert.deepEqual([f.g.phase, f.g.day], ['night', 2]);
 });
 
-test('second night death has last words; no sheriff means clockwise after the lowest dead seat', () => {
+test('second night death has NO last words; no sheriff means clockwise after the lowest dead seat', () => {
   const f = game(), victim = f.role('villager');
   Object.assign(f.g, { day: 2, step: 'seer', nightIndex: f.g.nightQueue.indexOf('seer'), kill: victim.seat });
   f.act(f.role('seer'), 'seer', victim.seat);
   f.ref.tick();
   f.act(victim, 'deathConfirm');
   f.ref.tick();
-  assert.equal(f.g.lastWordsSeat, victim.seat);
-  f.act(victim, 'lastwords', null, { end: true });
-  f.ref.tick();
   assert.equal(f.g.phase, 'dawn');
+  assert.ok(!f.g.lastWordsSeat);
   f.at(f.g.deadline);
   f.ref.tick();
   assert.equal(f.g.speechOrder[0], victim.seat % 9 + 1);

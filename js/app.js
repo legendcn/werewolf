@@ -2153,9 +2153,17 @@ function renderActionPanel(mode, inGame) {
     renderHunterPanel(seat);
     return;
   }
-  if (g.phase === 'sheriff') return renderSheriffPanel(seat);
-  if (g.phase === 'order') return renderOrderPanel(seat);
-  if (g.phase === 'lastwords') return renderLastWordsPanel(seat);
+  if (['sheriff', 'order', 'lastwords'].includes(g.phase)) {
+    if (pick && (pick.kind === 'explode' || pick.kind === 'explodeConfirm')) {
+      renderExplodePick(seat, role);
+      return;
+    }
+    if (g.phase === 'sheriff') renderSheriffPanel(seat);
+    else if (g.phase === 'order') renderOrderPanel(seat);
+    else renderLastWordsPanel(seat);
+    appendExplodeButtons(seat, role);
+    return;
+  }
   if (g.phase === 'badge') return renderBadgePanel(seat);
   if (!alive) {
     els.actionArea.append(note('你已出局，可以旁观；未轮到遗言时不能发言。'));
@@ -2287,7 +2295,7 @@ function canSelfExplode(role) {
 }
 
 function explodeStep() {
-  return g.phase === 'day' ? 'day' : (g.step || 'day');
+  return 'explode';
 }
 
 function renderExplodePick(seat, role) {

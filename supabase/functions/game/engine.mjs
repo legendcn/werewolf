@@ -34,6 +34,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
   const pad = (seat) => String(seat).padStart(2, '0');
   const civic = civicScenes(() => g, {
     enterStep, startDay, isBotSeat, isSeatOnline, tallyVotes: Rules.tallyVotes, resume,
+    openConfirm: openConfirmation,
   });
   function fetchActions(day, step) {
     const latest = new Map();
@@ -213,7 +214,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     if (!g || g.phase === 'finished') return;
     let actions = fetchActions(g.day, g.step || 'day');
     const now = clock();
-    if (['day', 'vote', 'runoff'].includes(g.phase)) {
+    if (['day', 'vote', 'runoff', 'sheriff', 'order', 'lastwords'].includes(g.phase)) {
       const boom = findExplodeAction(fetchActions(g.day, 'explode'));
       if (boom) {
         resolveExplode(boom);
@@ -529,15 +530,39 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     // A hunter who concealed the card must NOT disable cover on later deaths.
     const seats = mode.roles.includes('hunter') && !g.hunterRevealed
       ? deaths.filter(d => ['wolf', 'vote', 'lover', 'charm'].includes(d.reason)).map(d => d.seat) : [];
+    // A pending hunter/confirmation can still change the outcome, so victory
+    // must wait for it; only settle immediately when no window is possible.
+    const pendingConfirm = seats.length || g.confirmAfterWords || g.phase === 'hunter';
+    if (!pendingConfirm) {
+      const win = checkWin();
+      if (win) {
+        clearScenes();
+        finishGame(win.winner, win.reason);
+        return 'finished';
+      }
+    }
     if (g.phase === 'hunter') {
       if (seats.length) (g.queuedConfirmSeats ??= []).push(...seats);
       return 'pending';
     }
     if (seats.length) {
+      if (when === 'day') {
+        // 白天被放逐者先发表遗言，遗言结束后再开确认窗口（猎人先遗言后开枪）。
+        const prior = g.confirmAfterWords?.seats || [];
+        g.confirmAfterWords = { seats: [...prior, ...seats], when };
+        return 'continue';
+      }
       openConfirmation(seats, when);
       return 'pending';
     }
-    return settleVictory();
+    return 'continue';
+  }
+
+  function clearScenes() {
+    g.lastWordsQueue = [];
+    g.lastWordsSeat = null;
+    g.confirmAfterWords = null;
+    g.badgePending = null;
   }
 
   function settleVictory() {
@@ -559,6 +584,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
   }
 
   function finishGame(winner, reason) {
+    clearScenes();
     g.phase = 'finished';
     g.step = 'finished';
     g.deadline = null;
@@ -709,6 +735,19 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     const isKing = row?.role === 'wolfking';
     let target = isKing && action.payload.target != null ? Number(action.payload.target) : null;
     if (target != null && (!isAliveSeat(target) || target === seat)) target = null;
+    // 自爆打断一切白天流程：剩余遗言/确认窗口作废；警上自爆则竞选作废、警徽流失。
+    const duringElection = g.phase === 'sheriff';
+    g.lastWordsQueue = [];
+    g.lastWordsSeat = null;
+    g.confirmAfterWords = null;
+    if (duringElection) {
+      g.sheriff = null;
+      g.sheriffDone = true;
+      g.sheriffCandidates = null;
+      g.policeOrder = null;
+      g.runoffSeats = null;
+      g.log.push({ day: g.day, kind: 'system', text: '警长竞选被自爆打断，本局警徽流失' });
+    }
     g.log.push({
       day: g.day,
       kind: 'system',
@@ -832,7 +871,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
         wolfbeautySeat: roleSeat('wolfbeauty'),
         charmTarget: g.charmTarget,
       });
-      markDeaths(deaths, 'day');
+      markDeaths(deaths, from === 'night' ? 'night' : 'day');
     } else if (reveal) {
       g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号翻开猎人牌，没有开枪` });
     }

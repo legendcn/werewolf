@@ -27,6 +27,7 @@ test('an intervening departure must not settle a provisional winner before the h
     for (const p of f.roster) p.alive = p === wolf || p === villager || g.teams.gods.includes(p.seat);
     g.aliveSeats = g.aliveSeats.filter(s => f.roster.some(p => p.alive && p.seat === s));
     voteOut(f, hunter);
+    endWords(f, hunter.seat); // 白天被放逐者先遗言，再开确认窗口
     leave(f, wolf, reason);
     assert.equal(g.winner, null);
     assert.equal(project(g, hunter).hunterPending, hunter.seat);
@@ -48,6 +49,8 @@ test('identical public vote, confirmation, deadline and next phase for a village
   voteOut(cover, swapped);
   const publicViews = f => [project(f.g, null), project(f.g, f.role('seer'))];
   assert.deepEqual(publicViews(original), publicViews(cover));
+  endWords(original, hunter.seat); endWords(cover, swapped.seat); // 遗言在前，确认窗口在后
+  assert.deepEqual(publicViews(original), publicViews(cover));
   assert.equal(project(cover.g, swapped).step, 'deathConfirm');
   assert.throws(() => cover.act(swapped, 'hunter', cover.role('seer').seat, { reveal: true }));
   assert.throws(() => cover.act(cover.role('seer'), 'deathConfirm'));
@@ -56,31 +59,33 @@ test('identical public vote, confirmation, deadline and next phase for a village
   original.act(hunter, 'hunter', null, { reveal: false }); cover.act(swapped, 'deathConfirm');
   original.ref.tick(); cover.ref.tick();
   assert.deepEqual(publicViews(original), publicViews(cover));
-  endWords(original, hunter.seat); endWords(cover, swapped.seat);
-  assert.deepEqual(publicViews(original), publicViews(cover));
   assert.equal(original.g.phase, 'night');
   assert.equal(original.g.bank[hunter.seat], 46000);
   assert.equal(cover.g.bank[swapped.seat], 46000);
   // A later ordinary death must not reveal that the real hunter has already passed.
   voteOut(original, original.role('villager'));
+  assert.equal(project(original.g, null).phase, 'lastwords');
+  endWords(original, original.role('villager').seat);
   assert.equal(project(original.g, null).phase, 'settling');
   original.at(original.g.deadline + 60000); original.ref.tick();
-  endWords(original, original.role('villager').seat);
   assert.equal(original.g.phase, 'night');
 });
 
-test('a lover dying during another victim’s confirmation gets a full window before continuation', () => {
+test('a lover dying during another victim’s last words queues its own words, then a full confirmation window', () => {
   const f = game('qbt12'), [a, b] = f.roster.filter(p => p.role === 'villager'), hunter = f.role('hunter');
   f.g.lovers = [b.seat, hunter.seat];
   voteOut(f, a);
   leave(f, b);
-  assert.equal(project(f.g, a).step, 'deathConfirm');
+  assert.deepEqual([f.g.phase, f.g.lastWordsSeat], ['lastwords', a.seat]);
   assert.throws(() => f.act(hunter, 'hunter', null, { reveal: true }));
-  f.at(f.now() + 31000); f.act(a, 'deathConfirm'); f.ref.tick();
-  assert.equal(f.g.deadline - f.now(), 60000);
+  endWords(f, a.seat);
+  assert.deepEqual([f.g.phase, f.g.lastWordsSeat], ['lastwords', hunter.seat]);
+  endWords(f, hunter.seat);
+  assert.equal(project(f.g, a).step, 'deathConfirm');
   assert.equal(project(f.g, hunter).hunterPending, hunter.seat);
+  assert.equal(f.g.deadline - f.now(), 60000);
+  f.at(f.now() + 31000); f.act(a, 'deathConfirm'); f.ref.tick();
   f.act(hunter, 'hunter', null, { reveal: false }); f.ref.tick();
-  endWords(f, a.seat); endWords(f, hunter.seat);
   assert.equal(f.g.day, 2);
   assert.equal(f.g.phase, 'night');
 });
@@ -92,8 +97,10 @@ test('mid-speech lover death pauses the clock and a second departure does not di
   f.at(f.g.deadline + 10000);
   leave(f, a);
   f.at(f.now() + 18000); leave(f, b, 'kick');
-  f.act(hunter, 'hunter', null, { reveal: false }); f.ref.tick();
+  assert.deepEqual([f.g.phase, f.g.lastWordsSeat], ['lastwords', hunter.seat]);
+  assert.throws(() => f.act(hunter, 'hunter', null, { reveal: false }));
   endWords(f, hunter.seat);
+  f.act(hunter, 'hunter', null, { reveal: false }); f.ref.tick();
   assert.equal(f.g.phase, 'day');
   assert.equal(f.now() - f.g.deadline, 10000);
   f.act(speaker, 'speech', null, { turn: 0 });
