@@ -1,6 +1,7 @@
 import postgres from 'npm:postgres@3.4.7';
 import { dispatch, SettlementError } from './service.mjs';
 import { GameError } from './protocol.mjs';
+import { snapshotResponse } from './snapshot-response.mjs';
 
 // Use the transaction pooler on hosted Supabase. This secret is server-only.
 const db = postgres(Deno.env.get('GAME_DATABASE_URL') || Deno.env.get('SUPABASE_DB_URL')!, {
@@ -54,7 +55,7 @@ Deno.serve(async (req) => {
     const result = await db.begin((tx) =>
       dispatch((s: string, args: postgres.ParameterOrJSON<never>[] = []) => tx.unsafe(s, args), id, cmd)
     );
-    return json(result);
+    return json(await snapshotResponse(cmd, id, result));
   } catch (e) {
     if (e instanceof SettlementError) {
       console.error('settlement rolled back', e.retry.matchId, e.cause instanceof Error ? e.cause.name : 'error');

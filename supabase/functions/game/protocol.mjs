@@ -125,6 +125,9 @@ export function submit(engine, me, cmd, actions) {
     else {
       const normal = g.phase === 'day' && g.speechOrder[g.speechIndex] === seat;
       check(normal || (step === 'chat' && (lastTurn || policeTurn)));
+      if (step === 'chat' && (payload.turn !== undefined || payload.texts !== undefined)) {
+        requireGame(normal && payload.turn === g.speechIndex, '讨论发言轮次已变化，请核对后重试');
+      }
       const end = lastTurn ? 'lastwords' : policeTurn ? 'policeSpeech' : 'speech';
       check(!actions.some(a => a.step === end && a.seat === seat && a.day === g.day));
     }
@@ -132,8 +135,11 @@ export function submit(engine, me, cmd, actions) {
       check(payload.turn === g.speechIndex);
       engine.record(seat, step, null, { turn: g.speechIndex });
     } else {
-      check(typeof payload.text === 'string' && payload.text.trim().length > 0 && payload.text.length <= 200);
-      engine.record(seat, step, null, { name: me.name, text: payload.text.trim() });
+      const texts = payload.texts === undefined ? [payload.text] : payload.texts;
+      check(payload.texts === undefined || step === 'chat');
+      check(Array.isArray(texts) && texts.length > 0 && texts.length <= 12 &&
+        texts.every(text => typeof text === 'string' && text.length <= 200 && text.trim()));
+      for (const text of texts) engine.record(seat, step, null, { name: me.name, text: text.trim() });
     }
     return;
   }

@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import EmbeddedPostgres from 'embedded-postgres';
 import postgres from 'postgres';
 import { dispatch, SettlementError } from '../supabase/functions/game/service.mjs';
+import { snapshotResponse } from '../supabase/functions/game/snapshot-response.mjs';
 
 // A disposable PostgreSQL cluster, not the URL in js/config.js. Run as a non-root user.
 test('v8 migration and concurrent game transactions', async (t) => {
@@ -104,14 +105,41 @@ test('v8 migration and concurrent game transactions', async (t) => {
         { code, op, accountId:uid, playerId:memberships.get(uid), ...opts },
       )
     ).then(result => { if (result.playerId) memberships.set(uid,result.playerId); return result; });
+  const sync = async (uid, op, viewTag = '', inject) => snapshotResponse({ op, viewTag }, uid, await call(uid, op, { viewTag }, inject));
   await assert.rejects(call(ids[0], 'create', { mode:'newbie6', accountId:ids[1] }), /账号已变化/);
-  await call(ids[0], 'create', { mode: 'newbie6' });
-  for (const id of ids.slice(1, 5)) await call(id, 'join');
+  const created = await call(ids[0], 'create', { mode: 'newbie6', includeSnapshot:true });
+  assert.equal(created.snapshot.me.id,created.playerId);
+  assert.equal(created.snapshot.hostId,created.playerId);
+  assert.equal(created.snapshot.revision,1);
+  const joined = await call(ids[1], 'join', { includeSnapshot:true });
+  assert.equal(joined.snapshot.me.id,joined.playerId);
+  assert.equal(joined.snapshot.revision,2);
+  assert.equal(joined.snapshot.members.length,2);
+  const initialView = await sync(ids[1], 'snapshot');
+  const short = await sync(ids[1], 'snapshot', initialView.viewTag);
+  assert.deepEqual(short, { code, revision: initialView.revision, viewTag: initialView.viewTag, unchanged:true });
+  assert.ok(JSON.stringify(short).length < JSON.stringify(initialView).length);
+  await db`update players set last_seen=now()-interval '2 minutes' where id=${created.playerId}`;
+  await db`update players set last_seen=now() where id=${joined.playerId}`;
+  let heartbeats = 0;
+  const countHeartbeat = sql => { if (sql.startsWith('update public.players set last_seen=')) heartbeats++; };
+  const presence = await sync(ids[1], 'snapshot', initialView.viewTag, countHeartbeat);
+  assert.equal(heartbeats, 0, 'an already fresh member need not write another heartbeat');
+  assert.equal(presence.revision,initialView.revision);
+  assert.equal(presence.hostId,joined.playerId);
+  assert.equal(presence.members.find(p=>p.id===created.playerId).online,false);
+  assert.notEqual(presence.viewTag,initialView.viewTag);
+  const returned = await call(ids[0], 'snapshot', {}, countHeartbeat);
+  assert.equal(heartbeats, 1, 'returning members refresh presence immediately');
+  assert.equal(returned.hostId, created.playerId);
+  for (const id of ids.slice(2, 5)) await call(id, 'join');
   const race = await Promise.allSettled([call(ids[5], 'join'), call(ids[6], 'join')]);
   assert.equal(race.filter((r) => r.status === 'fulfilled').length, 1);
   const outsider = race[0].status === 'fulfilled' ? ids[6] : ids[5];
-  assert.equal((await call(outsider, 'restore')).gone, true);
-  assert.equal((await call(ids[0], 'restore')).code, code);
+  assert.deepEqual(await call(outsider, 'restore', {includeSnapshot:true, playerId:created.playerId}),{gone:true});
+  const legacyRestore = await call(ids[0], 'restore');
+  assert.equal(legacyRestore.code, code);
+  assert.ok(!('snapshot' in legacyRestore));
   const failAt = (pattern) => (s) => {
     if (pattern.test(s)) throw new Error('test rollback');
   };
@@ -146,6 +174,14 @@ test('v8 migration and concurrent game transactions', async (t) => {
   }
   assert.deepEqual((await appoint(fixed,null)).appointments, {});
   assert.deepEqual((await appoint(fixed,'witch')).appointments, {[fixed]:'witch'});
+  const ownerView = await sync(ids[1], 'snapshot');
+  assert.deepEqual(ownerView.appointments,{[fixed]:'witch'});
+  await db`update profiles set role='member' where id=${ids[1]}`;
+  const demoted = await sync(ids[1], 'snapshot', ownerView.viewTag);
+  assert.equal(demoted.revision,ownerView.revision);
+  assert.ok(!('appointments' in demoted));
+  assert.notEqual(demoted.viewTag,ownerView.viewTag);
+  await db`update profiles set role='owner' where id=${ids[1]}`;
   let rosterWrites = 0;
   const countRosterWrites = sql => {
     if (/^update public\.players\b.*\bset role=/i.test(sql)) rosterWrites++;
@@ -176,11 +212,32 @@ test('v8 migration and concurrent game transactions', async (t) => {
     step: 'wolfchat',
     payload: { text: 'private discussion' },
   });
-  assert.equal((await call(outsider, 'spectate')).chat.length, 0);
+  const wolfRestore = await call(wolves[0].account_id,'restore',{includeSnapshot:true});
+  assert.equal(wolfRestore.snapshot.me.id,wolves[0].id);
+  assert.equal(wolfRestore.snapshot.channel,'wolfchat');
+  assert.equal(wolfRestore.snapshot.chat.at(-1).payload.text,'private discussion');
+  assert.ok(wolfRestore.snapshot.members.every(m=>!('role' in m) && !('account_id' in m)));
+  const guestRestore = await call(viewer,'restore',{includeSnapshot:true,playerId:wolves[0].id});
+  assert.equal(guestRestore.snapshot.me.role,'witch');
+  assert.equal(guestRestore.snapshot.options.g.teams,undefined);
+  assert.deepEqual(guestRestore.snapshot.chat,[]);
+  const publicView = await call(outsider, 'spectate', {includeSnapshot:true});
+  assert.equal(publicView.chat.length,0);
+  assert.ok(!('snapshot' in publicView) && !('viewTag' in publicView));
+  const privateView = await sync(wolves[0].account_id, 'snapshot');
+  const spectator = await sync(outsider, 'spectate', privateView.viewTag);
+  assert.ok(spectator.options.g);
+  assert.equal(spectator.chat.length,0);
+  assert.notEqual(spectator.viewTag,privateView.viewTag);
+  assert.equal((await sync(outsider,'spectate',spectator.viewTag)).unchanged,true);
+  const differentViewer = await sync(legacy,'spectate',spectator.viewTag);
+  assert.ok(differentViewer.options.g);
+  assert.notEqual(differentViewer.viewTag,spectator.viewTag);
   // Seed a saved six-player game from before new deals stopped electing a sheriff.
   await db`update rooms set options=jsonb_set(options,'{g}',(options->'g') || '{"phase":"dawn","step":"dawn","deadline":0,"sheriffDone":false}'::jsonb) where rooms.code=${code}`;
   rosterWrites = 0;
-  assert.equal((await call(ids[1], 'snapshot', {}, countRosterWrites)).options.g.step, 'policeSignup');
+  const resumed = await call(ids[1], 'restore', {includeSnapshot:true}, countRosterWrites);
+  assert.equal(resumed.snapshot.options.g.step, 'policeSignup');
   assert.equal(rosterWrites, 0, 'a phase-only change must not write any seats');
   const signup = (id, run) => call(id,'act',{day:1, matchId, step:'policeSignup', payload:{run}});
   const attempts = await Promise.allSettled([signup(wolves[0].account_id,true), signup(wolves[0].account_id,true)]);
@@ -192,6 +249,16 @@ test('v8 migration and concurrent game transactions', async (t) => {
   const order = {day:1, matchId, step:'order', payload:{dir:'ccw'}};
   await assert.rejects(call(wolves[1].account_id,'act',order),/当前不能/);
   assert.equal((await call(wolves[0].account_id,'act',order)).options.g.speechOrder[0],wolves[0].seat);
+  const speech = {day:1, matchId, step:'chat', payload:{turn:0,texts:['先到','其次','最后']}};
+  let chatInserts = 0;
+  const countChatInsert = sql => { if (sql.startsWith('insert into public.game_actions')) chatInserts++; };
+  await assert.rejects(call(wolves[0].account_id,'act',{...speech,payload:{...speech.payload,texts:['不得部分写入','']}}), /当前不能/);
+  await assert.rejects(call(wolves[0].account_id,'act',{...speech,payload:{...speech.payload,turn:1}}), /轮次已变化/);
+  const chatBatch = await call(wolves[0].account_id,'act',speech,countChatInsert);
+  assert.equal(chatBatch.chatBatch,true);
+  assert.ok(!chatBatch.submitted.includes('1:chat'));
+  assert.equal(chatInserts,1);
+  assert.deepEqual(chatBatch.chat.map(row=>row.payload.text),speech.payload.texts);
   // Seed a long discussion and a timed-out vote, then inject a READ failure.
   await db`insert into game_actions(match_id,room_code,day,phase,step,player_id,payload)
     select ${matchId},${code},1,'day','chat',${
@@ -241,7 +308,9 @@ test('v8 migration and concurrent game transactions', async (t) => {
   assert.equal(await replayCountAs(crypto.randomUUID()), '0');
   assert.equal(r.events.filter((e) => e.t === 'policeSignup').length, 6);
   assert.equal(r.events.filter((e) => e.t === 'order').length, 1);
-  assert.equal(r.events.filter((e) => e.t === 'chat').length, 505);
+  const publicMessages = r.events.filter(e => e.t === 'chat');
+  assert.equal(publicMessages.length, 508);
+  assert.deepEqual(publicMessages.slice(0,3).map(e=>e.text),speech.payload.texts);
   assert.ok(r.events.some((e) => e.t === 'wolfchat' && e.text === 'private discussion'));
   assert.equal((await db`select sum(games) n from ratings`)[0].n, '6');
   const rem = await db`select account_id from players where not departed order by joined_at,id`;

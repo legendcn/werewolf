@@ -116,6 +116,74 @@ test('rejoining a saved room does not fetch lobby data before or during the rest
   assert.deepEqual(requests, ['leaderboard', 'history']);
 });
 
+for (const op of ['create', 'join', 'restore']) {
+  test(`${op} applies the first snapshot without another game request`, async t => {
+    const sent = [];
+    const snapshot = {
+      code:'123456', revision:2, hostId:'p', options:{mode:'newbie6',g:null},
+      members:[{id:'p',name:'Alice',online:true}], me:{id:'p',seat:null,role:null},
+      channel:'chat',chat:[],wolfPicks:[],submitted:[],
+    };
+    const {run,w} = await page(t,{ functions:{invoke:async (_,{body})=>{
+      sent.push(body);
+      return {data:body.op === 'snapshot' ? snapshot : {code:snapshot.code,playerId:'p',name:'Alice',snapshot}};
+    }} });
+    w.localStorage.setItem('wolf.session:alice',JSON.stringify({code:snapshot.code,playerId:'p',accountId:'alice'}));
+    run(`profile={id:'alice',status:'approved'}; randomCode=()=> '123456'; loadRatings=async()=>{}`);
+    await run({create:'createRoom()',join:`joinRoom('Alice','123456')`,restore:'restoreSession()'}[op]);
+    await new Promise(r=>setImmediate(r));
+    assert.deepEqual(sent.map(r=>[r.op,r.includeSnapshot]),[[op,true]]);
+    assert.equal(run('room.revision'),2);
+    assert.equal(run('els.roomView.hidden'),false);
+    assert.match(run('els.playerList.textContent'),/Alice/);
+    assert.equal(run('!!pollTimer'),true);
+    const saved = JSON.parse(w.localStorage.getItem('wolf.session:alice'));
+    assert.ok(!('snapshot' in saved));
+  });
+}
+
+for (const unusable of ['missing', 'different member']) {
+  test(`entry with ${unusable} first snapshot falls back to a membership-bound poll`, async t => {
+    const sent = [];
+    const snapshot = {
+      code:'123456',revision:2,hostId:'p',options:{mode:'newbie6',g:null},
+      members:[{id:'p',name:'Alice',online:true}],me:{id:'p',seat:null,role:null},channel:'chat',chat:[],wolfPicks:[],submitted:[],
+    };
+    const {run} = await page(t,{ functions:{invoke:async (_,{body})=>{
+      sent.push(body);
+      if (body.op === 'snapshot') return {data:snapshot};
+      return {data:{code:snapshot.code,playerId:'p',name:'Alice',
+        snapshot:unusable === 'missing' ? undefined : {...snapshot,me:{id:'other',role:'werewolf'}}}};
+    }} });
+    run(`profile={id:'alice',status:'approved'}; loadRatings=async()=>{}`);
+    await run(`joinRoom('Alice','123456')`);
+    await new Promise(r=>setImmediate(r));
+    assert.deepEqual(sent.map(r=>r.op),['join','snapshot']);
+    assert.equal(sent[1].playerId,'p');
+    assert.equal(run('myRow.id'),'p');
+    assert.equal(run('myRow.role'),null);
+  });
+}
+
+test('a rolled-back settlement during restore still recovers the seat and starts polling', async t => {
+  const sent = [];
+  const {run,w} = await page(t,{ functions:{invoke:async (_,{body})=>{
+    sent.push(body);
+    if (body.op === 'restore' && body.includeSnapshot) return {data:{
+      code:'SETTLEMENT_RETRY',error:'本次操作未保存',retry:{matchId:'m',revision:2},
+    }};
+    if (body.op === 'restore') return {data:{code:'123456',playerId:'p',name:'Alice'}};
+    return {error:new Error('offline')};
+  }} });
+  w.localStorage.setItem('wolf.session:alice',JSON.stringify({code:'123456',playerId:'p',accountId:'alice'}));
+  run(`profile={id:'alice',status:'approved'}`);
+  await run('restoreSession()');
+  await new Promise(r=>setImmediate(r));
+  assert.deepEqual(sent.map(r=>[r.op,r.includeSnapshot]),[['restore',true],['restore',undefined],['snapshot',undefined]]);
+  assert.equal(run('session.playerId'),'p');
+  assert.equal(run('!!pollTimer'),true);
+});
+
 test('unchanged polls preserve room controls, but presence changes with the same revision still render', async t => {
   const {run,w} = await page(t);
   const snapshot = {
@@ -135,6 +203,72 @@ test('unchanged polls preserve room controls, but presence changes with the same
   await run(`roomCommand('snapshot')`);
   assert.notStrictEqual(w.document.querySelector('#playerList li'), seat);
   assert.equal(run('members[0].online'), false);
+});
+
+test('idle polls accept a short confirmation only for the room view still on screen', async t => {
+  const {run,w} = await page(t), sent = [];
+  const full = {
+    code:'123456',revision:4,viewTag:'a'.repeat(64),hostId:'p',options:{mode:'newbie6',g:null},
+    members:[{id:'p',name:'Alice',online:true}],me:{id:'p',seat:null,role:null},
+    channel:'chat',chat:[],wolfPicks:[],submitted:[],
+  };
+  const unchanged = {code:full.code,revision:full.revision,viewTag:full.viewTag,unchanged:true};
+  let reply = full;
+  w.getSnap = (_,__,args) => { sent.push(args); return structuredClone(reply); };
+  run(`session={code:'123456',playerId:'p'}; ratingsKey='Alice'; gameRequest=async(...args)=>getSnap(...args);`);
+  await run(`roomCommand('snapshot')`);
+  const seat = w.document.querySelector('#playerList li');
+  assert.ok(seat);
+  reply = unchanged;
+  await run(`roomCommand('snapshot')`);
+  assert.deepEqual(sent.map(args=>[args.playerId,args.viewTag]),[['p',''],['p',full.viewTag]]);
+  assert.strictEqual(w.document.querySelector('#playerList li'),seat);
+  assert.equal(run('room.me.id'),'p');
+
+  // An action may return a newer view before the short poll response arrives.
+  w.delayed = Promise.withResolvers();
+  run(`gameRequest=()=>delayed.promise;`);
+  const pending = run(`roomCommand('snapshot')`);
+  w.newer = {...full, revision:5, viewTag:undefined, members:[{id:'p',name:'Alice',online:false}]};
+  run('applySnapshot(newer)');
+  w.delayed.resolve(unchanged);
+  await pending;
+  assert.equal(run('room.revision'),5);
+  assert.equal(run('members[0].online'),false);
+});
+
+test('chat-only polls and sends refresh messages without rebuilding controls', async t => {
+  const {run,w} = await page(t);
+  const snapshot = {
+    code:'123456', revision:10, hostId:'p',
+    options:{mode:'newbie6',g:{phase:'day',step:'day',day:1,matchId:'m',aliveSeats:[1,2],speechOrder:[1,2],speechIndex:0,teams:{wolves:[1]}}},
+    members:[{id:'p',name:'Alice',seat:1,online:true},{id:'q',name:'Bob',seat:2,online:true}],
+    me:{id:'p',seat:1,role:'werewolf'},channel:'chat',chat:[],wolfPicks:[],submitted:[],
+  };
+  w.getSnap = () => structuredClone(snapshot);
+  run(`session={code:'123456',playerId:'p'}; ratingsKey='Alice|Bob'; gameRequest=async()=>getSnap();`);
+  await run(`roomCommand('snapshot')`);
+  const seat = w.document.querySelector('#playerList li');
+  const actions = Array.from(w.document.querySelector('#actionArea').childNodes);
+  assert.ok(seat && actions.length);
+  for (let i = 1; i <= 10; i++) {
+    snapshot.revision++;
+    snapshot.chat.push({ day:1,payload:{text:`发言 ${i}`} });
+    await run(i === 1 ? `roomCommand('act',{step:'chat'})` : `roomCommand('snapshot')`);
+  }
+  assert.equal(run('room.revision'), snapshot.revision);
+  assert.match(run('els.chatFeed.textContent'), /发言 10/);
+  assert.strictEqual(w.document.querySelector('#playerList li'), seat);
+  assert.ok(actions.every((node, i) => w.document.querySelector('#actionArea').childNodes[i] === node));
+
+  snapshot.revision++;
+  Object.assign(snapshot.options.g,{phase:'night',step:'wolves',day:2});
+  snapshot.channel = 'wolfchat';
+  snapshot.chat = [{day:2,payload:{text:'夜聊'}}];
+  await run(`roomCommand('snapshot')`);
+  assert.notStrictEqual(w.document.querySelector('#playerList li'), seat);
+  assert.match(run('els.chatFeed.textContent'), /夜聊/);
+  assert.doesNotMatch(run('els.chatFeed.textContent'), /发言/);
 });
 
 test('real DOM accepts a new match and rejects delayed snapshots from the old one', async (t) => {
@@ -174,6 +308,101 @@ test('real DOM accepts a new match and rejects delayed snapshots from the old on
   assert.equal(run('g'), null);
   assert.equal(w.document.querySelector('#watchReplayBtn').hidden, true);
 });
+for (const chatBatch of [false,true]) {
+  test(`new discussion messages wait for earlier drafts on ${chatBatch ? 'current' : 'legacy'} servers`, async t => {
+    const {run,w} = await page(t), sent = [], first = Promise.withResolvers();
+    w.send = (op,args) => { sent.push(args); return sent.length === 1 ? first.promise : Promise.resolve(); };
+    run(`session={code:'123456',playerId:'p'}; room={chatBatch:${chatBatch}};
+      g={matchId:'m',phase:'day',step:'day',day:1,aliveSeats:[1,2],speechOrder:[2,1],speechIndex:0};
+      myRow={seat:1}; roomCommand=send;`);
+    const type = text => { w.text = text; run(`els.chatInput.value=text; els.chatForm.requestSubmit()`); };
+    type('先写的第一条'); type('先写的第二条');
+    assert.equal(sent.length,0);
+    run('g.speechIndex=1;updateChatForm()');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(sent.length,1);
+    type('轮到我之后写的第三条');
+    assert.equal(run('JSON.parse(localStorage.getItem(preSpeechKey())).paused'),true);
+    run('els.endSpeechBtn.click()');
+    assert.equal(sent.length,1);
+    assert.equal(run('els.endSpeechBtn.disabled'),true);
+    first.resolve();
+    await new Promise(resolve=>setImmediate(resolve));
+    const messages = args => Array.from(args.payload.texts || [args.payload.text]);
+    assert.deepEqual(sent.map(messages),chatBatch
+      ? [['先写的第一条','先写的第二条'],['轮到我之后写的第三条']]
+      : [['先写的第一条'],['先写的第二条'],['轮到我之后写的第三条']]);
+    assert.ok(sent.every(m=>m.step==='chat' && m.payload.turn===1));
+    assert.equal(run('pendingSpeechCount()'),0);
+    assert.equal(run('els.endSpeechBtn.disabled'),false);
+  });
+}
+
+test('a discussion batch does not continue sending queued text after a phase change', async t => {
+  const {run,w} = await page(t), sent=[], first=Promise.withResolvers();
+  w.send = (op,args) => { sent.push(args); return first.promise; };
+  run(`session={code:'123456',playerId:'p'}; room={chatBatch:false};
+    g={matchId:'m',phase:'day',step:'day',day:1,aliveSeats:[1],speechOrder:[1],speechIndex:0};
+    myRow={seat:1}; roomCommand=send; queueSpeech('第一条'); queueSpeech('队尾');`);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sent.length,1);
+  run(`g={...g,phase:'lastwords',step:'lastwords',lastWordsSeat:1};updateChatForm()`);
+  first.resolve();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sent.length,1);
+  assert.equal(run('preSpeech.msgs[0]'),'队尾');
+});
+
+test('failed discussion delivery preserves the queue until an explicit retry', async t => {
+  const {run,w} = await page(t), sent=[];
+  w.send = async (op,args) => { sent.push(args.payload.text); if (sent.length === 1) throw new Error('发送失败'); };
+  run(`session={code:'123456',playerId:'p'}; room={chatBatch:true};
+    g={matchId:'m',phase:'day',step:'day',day:1,aliveSeats:[1],speechOrder:[1],speechIndex:0};
+    myRow={seat:1}; roomCommand=send; queueSpeech('保留这一条');`);
+  await new Promise(resolve=>setImmediate(resolve));
+  run('updateChatForm();updateChatForm()');
+  assert.deepEqual(sent,['保留这一条']);
+  assert.equal(run('els.retrySpeechBtn.hidden'),false);
+  run('els.retrySpeechBtn.click()');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(sent,['保留这一条','保留这一条']);
+  assert.equal(run('els.retrySpeechBtn.hidden'),true);
+});
+
+test('vote shows pending immediately, ignores duplicate clicks, and waits for the referee receipt', async t => {
+  const {run,w} = await page(t), sent=[];
+  const snapshot = {
+    code:'123456',revision:10,hostId:'p',options:{mode:'newbie6',g:{matchId:'m',phase:'vote',step:'vote',day:1,aliveSeats:[1,2],voteBanned:[]}},
+    members:[{id:'p',name:'Alice',seat:1,online:true},{id:'q',name:'Bob',seat:2,online:true}],
+    me:{id:'p',seat:1,role:'villager'},channel:'chat',chat:[],wolfPicks:[],submitted:[],
+  };
+  w.snap=snapshot;
+  let result = Promise.withResolvers();
+  w.ask = (op,code,args) => { sent.push([op,args?.step]); return result.promise; };
+  run(`session={code:'123456',playerId:'p'}; ratingsKey='Alice|Bob'; gameRequest=ask; applySnapshot(snap)`);
+  const confirmVote = () => {
+    run('togglePick(2)');
+    const button = [...w.document.querySelectorAll('#actionArea button')].find(b=>b.textContent==='确认');
+    assert.ok(button);
+    button.click(); button.click();
+  };
+  confirmVote();
+  assert.match(run('els.actionArea.textContent'),/正在提交投票/);
+  assert.doesNotMatch(run('els.actionArea.textContent'),/已投票/);
+  await run('pollOnce()');
+  assert.deepEqual(sent,[['act','vote']]);
+  result.reject(new Error('收票失败'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(run('els.toast.textContent'),/收票失败/);
+  assert.doesNotMatch(run('els.actionArea.textContent'),/正在提交/);
+  result = Promise.withResolvers();
+  confirmVote();
+  result.resolve({...snapshot,revision:11,submitted:['1:vote']});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(run('els.actionArea.textContent'),/已投票/);
+  assert.equal(sent.length,2);
+});
+
 test('sending day or wolf chat never announces a submission awaiting settlement', async (t) => {
   const { w, run } = await page(t);
   const sent = [];
@@ -185,7 +414,7 @@ test('sending day or wolf chat never announces a submission awaiting settlement'
       run(`g.phase='night'; g.step='wolves'; myRow.role='werewolf'; submitted.add('1:wolves')`);
     }
     run(`renderActionPanel(null,true); updateChatForm(); els.chatInput.value='测试发言'; els.chatForm.requestSubmit();`);
-    await Promise.resolve();
+    await new Promise(resolve=>setImmediate(resolve));
     assert.equal(sent.at(-1), step);
     assert.equal(w.document.querySelector('#toast').hidden, true);
     assert.doesNotMatch(w.document.querySelector('#actionArea').textContent, /已提交，等待结算/);
@@ -446,7 +675,7 @@ test('preview serves only frontend assets and rejects invalid paths in the parse
   assert.throws(() => preview.assetPath('/%'), URIError);
 });
 
-test('optimistic act marks submitted instantly, blocks duplicates, yields polls, rolls back on failure', async (t) => {
+test('act shows submitting instantly, blocks duplicates, yields polls, rolls back on failure', async (t) => {
   const { w, run } = await page(t);
   const mode = MODES.find((m) => m.id === 'std9') || MODES[0];
   const roster = mode.roles.map((_, i) => ({ id: 'p' + i, name: 'P' + i, is_bot: false, online: true }));
@@ -468,11 +697,10 @@ test('optimistic act marks submitted instantly, blocks duplicates, yields polls,
   let calls = 0;
   w.bump = () => calls++;
   run(`roomCommand=(op,args)=>{bump(); return new Promise(res=>{finishAct=()=>res({});});};`);
-  const key = `${data.options.g.day}:wolves`;
   const pending = run(`act('wolves', ${target})`);
-  assert.equal(run(`optimistic.has('${key}')`), true, 'optimistic mark set before server response');
+  assert.equal(run('currentAction() !== null'), true, 'pending action set before server response');
   assert.equal(run('acting'), 1);
-  assert.match(w.document.querySelector('#actionArea').textContent, /已选定袭击目标|已提交/);
+  assert.match(w.document.querySelector('#actionArea').textContent, /正在提交/);
   assert.equal(await run(`act('wolves', ${target})`), false, 'duplicate click ignored');
   assert.equal(calls, 1);
   run('pollOnce()');
@@ -480,10 +708,10 @@ test('optimistic act marks submitted instantly, blocks duplicates, yields polls,
   assert.equal(calls, 1, 'poll yields to in-flight action');
   run('finishAct()');
   assert.equal(await pending, true);
-  assert.equal(run(`optimistic.has('${key}') || acting !== 0`), false);
+  assert.equal(run('currentAction() !== null || acting !== 0'), false);
   run(`roomCommand=async()=>{throw new Error('网络失败')};`);
   assert.equal(await run(`act('wolves', ${target})`), false);
-  assert.equal(run(`optimistic.has('${key}')`), false, 'failure rolls back optimistic mark');
+  assert.equal(run('currentAction()'), null, 'failure rolls back pending action');
   assert.match(w.document.querySelector('#toast').textContent, /网络失败/);
 });
 

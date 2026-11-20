@@ -59,6 +59,7 @@ test('last words before the hunter shot, then badge; only the speaker can post, 
   const words = (p) => {
     assert.deepEqual([f.g.phase, project(f.g, null).lastWordsSeat], ['lastwords', p.seat]);
     assert.throws(() => f.act(next, 'chat', null, { text: '插话' }));
+    assert.throws(() => f.act(p, 'chat', null, { turn: 0, texts: ['旧讨论', '旧队尾'] }), /轮次已变化/);
     f.act(p, 'chat', null, { text: '一' });
     f.act(p, 'chat', null, { text: '二' });
     f.at(f.g.deadline + 1);
