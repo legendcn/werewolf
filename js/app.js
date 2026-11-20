@@ -537,6 +537,7 @@ function showAuthProblem(title, text) {
 async function afterApproved() {
   if (approvedRouted) return;
   approvedRouted = true;
+  const epoch = authEpoch;
   els.loginPass.value = '';
   els.regPass.value = '';
   els.regPass2.value = '';
@@ -548,6 +549,7 @@ async function afterApproved() {
   try {
     await restoreSession();
   } catch (error) {
+    if (epoch !== authEpoch) return;
     setStatus('房间暂时无法恢复，重连信息已保留。刷新可重试。');
     toast(friendlyError(error));
   }
@@ -604,7 +606,7 @@ async function readProfileAndRoute(epoch, allowRepair = true) {
   if (data.status === 'approved') {
     stopPendingPoll();
     if (!wasApproved) await afterApproved();
-    if (isAdminAccount()) loadAdmin();
+    if (epoch === authEpoch && isAdminAccount()) loadAdmin();
   } else if (data.status === 'pending') {
     startPendingPoll();
   } else {
@@ -644,7 +646,7 @@ async function refreshProfileQuiet() {
     stopPendingPoll();
     toast('审核已通过，可以开始游戏了');
     if (!wasApproved) await afterApproved();
-    if (isAdminAccount()) loadAdmin();
+    if (epoch === authEpoch && isAdminAccount()) loadAdmin();
   } else {
     stopPendingPoll();
     if (data.status === 'banned') {
@@ -845,7 +847,7 @@ function updateModeHint() {
 function enterRoom(nextSession) {
   clearSettlementRetry();
   session = nextSession;
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...session, accountId: profile?.id }));
+  localStorage.setItem(membershipKey(), JSON.stringify({ ...session, accountId: profile?.id }));
   els.roomCodeLabel.textContent = session.code;
   room = null;
   members = [];
@@ -2784,11 +2786,12 @@ function exitRoomLocal(message) {
   const old = session;
   clearRoomViews();
   // Another tab may have already rejoined and saved its new membership.
-  const saved = localStorage.getItem(SESSION_KEY);
+  const key = membershipKey();
+  const saved = localStorage.getItem(key);
   if (saved) {
     try {
       const record = JSON.parse(saved);
-      if (record?.code === old.code && record.playerId === old.playerId) localStorage.removeItem(SESSION_KEY);
+      if (record?.code === old.code && record.playerId === old.playerId) localStorage.removeItem(key);
     } catch { /* Not this membership's record. */ }
   }
   showHome();

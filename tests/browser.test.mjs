@@ -20,6 +20,7 @@ async function page(t, overrides = {}) {
   w.supabase = {
     createClient: () => ({
       auth: {
+        async getSession() { return {data:{session:{user:{id:run('profile?.id')},access_token:'test'}}}; },
         onAuthStateChange(cb) { queueMicrotask(() => cb('INITIAL_SESSION', null)); },
       },
       ...overrides,
@@ -40,15 +41,17 @@ test('reconnect retains saved membership on error, removes it only on confirmed 
     functions: { invoke: async () => fail ? { error: new Error('offline') } : { data: { gone: true } } },
   });
   const token = JSON.stringify({ code: '123456', playerId: 'p' });
-  w.localStorage.setItem('wolf.session', token);
-  run(`profile={username:'test',status:'approved'};loadLeaderboard=loadHistory=()=>{};`);
+  w.localStorage.setItem('wolf.session:test', token);
+  run(`profile={id:'test',username:'test',status:'approved'};loadLeaderboard=loadHistory=()=>{};`);
   await run('afterApproved()');
-  assert.equal(w.localStorage.getItem('wolf.session'), token);
+  assert.equal(w.localStorage.getItem('wolf.session:test'), token);
   fail = false;
   await run('restoreSession()');
-  assert.equal(w.localStorage.getItem('wolf.session'), null);
+  assert.equal(w.localStorage.getItem('wolf.session:test'), null);
+  w.localStorage.setItem('wolf.session',token);
+  await run('restoreSession()'); assert.equal(w.localStorage.getItem('wolf.session'),token);
 });
-for (const late of ['snapshot', 'gone']) {
+for (const late of ['snapshot', 'old snapshot', 'gone']) {
   test(`old tab receiving ${late} after rejoin keeps the newer reconnect record and never adopts its snapshot`, async t => {
     let finish;
     const token = {code:'123456',playerId:'new',accountId:'alice'};
@@ -59,18 +62,42 @@ for (const late of ['snapshot', 'gone']) {
       els.roleName.textContent='OLD_CARD'; startPolling();`);
     const pending = run(`roomCommand('snapshot')`);
     // Same-origin tab B has left and rejoined while A was awaiting its snapshot.
-    const storage = w.localStorage; storage.setItem('wolf.session',JSON.stringify(token));
-    finish({data:late === 'gone' ? {gone:true} : {code:token.code,revision:12,me:{id:'new',role:'witch'}}});
+    await new Promise(resolve => setImmediate(resolve));
+    const storage = w.localStorage; storage.setItem('wolf.session:alice',JSON.stringify(token));
+    finish({data:late === 'gone' ? {gone:true} : {code:token.code,revision:12,me:{id:late === 'old snapshot' ? 'old' : 'new',role:'witch'}}});
     await pending;
     assert.equal(run('session === null && room === null && myRow === null && pollTimer === null'),true);
     assert.equal(run('els.roleName.textContent'),'');
-    assert.deepEqual(JSON.parse(storage.getItem('wolf.session')),token);
+    assert.deepEqual(JSON.parse(storage.getItem('wolf.session:alice')),token);
     run(`profile.id='bob'; pollOnce=startPolling=()=>{}`); await run('restoreSession()');
-    assert.equal(run('session'),null); assert.deepEqual(JSON.parse(storage.getItem('wolf.session')),token);
+    assert.equal(run('session'),null); assert.deepEqual(JSON.parse(storage.getItem('wolf.session:alice')),token);
     run(`profile.id='alice'`); await run('restoreSession()');
     assert.equal(run('session.playerId'),'new');
   });
 }
+
+test('requests bind the displayed account, pin the bearer and ignore a superseded 401 without replay', async t => {
+  let id='bob', token='other', finish;
+  const sent=[];
+  const {run}=await page(t,{auth:{onAuthStateChange() {},async getSession(){return {data:{session:{user:{id},access_token:token}}};}},
+    functions:{invoke:(_,request)=>{sent.push(request); return new Promise(resolve=>{finish=resolve;});}}});
+  run(`profile={id:'alice'}; session={code:'123456',playerId:'seat-a'}`);
+  await assert.rejects(run(`roomCommand('bot')`),/登录状态已变化/); assert.equal(sent.length,0);
+  id='alice'; token='old'; const late=run(`roomCommand('bot')`);
+  await new Promise(resolve=>setImmediate(resolve)); token='new';
+  finish({error:{context:{status:401}}}); await assert.rejects(late,/凭据已变化/);
+  assert.equal(sent.length,1); assert.equal(sent[0].headers.Authorization,'Bearer old');
+  assert.deepEqual([sent[0].body.accountId,sent[0].body.playerId],['alice','seat-a']);
+  assert.equal(run('session.playerId'),'seat-a');
+});
+
+test('stale recovery failures do not replace the next account’s status',async t=>{
+  const {run,w}=await page(t); let fail;
+  w.recover=()=>new Promise((_,reject)=>{fail=reject;});
+  run(`profile={id:'a',username:'Alice'}; restoreSession=recover; loadLeaderboard=loadHistory=()=>{}`);
+  const pending=run('afterApproved()'); run(`showAuthScreen(); setStatus('Bob')`);
+  fail(new Error('late')); await pending; assert.equal(run('els.status.textContent'),'Bob');
+});
 
 test('real DOM accepts a new match and rejects delayed snapshots from the old one', async (t) => {
   const { run, w } = await page(t);
@@ -258,7 +285,7 @@ test('spectating another room keeps the seat and last frame, recovers then pause
 test('SIGNED_OUT purges private DOM, drafts and polling; late room and replay responses cannot restore them', async t => {
   let authChanged, finishRoom, finishReplay;
   const { run, w } = await page(t, {
-    auth: { onAuthStateChange(cb) { authChanged = cb; }, async getSession() { return {data:{session:null}}; } },
+    auth: { onAuthStateChange(cb) { authChanged = cb; }, async getSession() { return {data:{session:{user:{id:'old'},access_token:'test'}}}; } },
     functions: { invoke: () => new Promise(resolve => { finishRoom = resolve; }) },
     from: () => ({select() { return this; }, eq() { return this; }, maybeSingle() {
       return new Promise(resolve => { finishReplay = resolve; });
@@ -270,6 +297,7 @@ test('SIGNED_OUT purges private DOM, drafts and polling; late room and replay re
     els.roleName.textContent='PRIVATE_ROLE'; els.chatInput.value='unsent';
     preSpeech={day:1,msgs:['PRIVATE_DRAFT']}; savePreSpeech(); showRoom(); startPolling();`);
   const lateRoom = run(`roomCommand('snapshot')`), lateReplay = run(`openReplay(1)`);
+  await new Promise(resolve => setImmediate(resolve));
   authChanged('SIGNED_OUT');
   assert.equal(run('session === null && g === null && myRow === null && !roleShown && pollTimer === null'),true);
   assert.equal(run('wolfChatRows.length + preSpeech.msgs.length'),0);
@@ -296,7 +324,7 @@ test('manual settlement retry repeats only a confirmed rolled-back operation wit
     requests.push(body);
     return { data: requests.length === 1 ? { error: '事务已回滚', code: 'SETTLEMENT_RETRY', retry } : { gone: true } };
   } } });
-  run(`session={code:'123456',playerId:'p'}; localStorage.setItem(SESSION_KEY,JSON.stringify(session)); g={matchId:'match'};room={revision:9};`);
+  run(`profile={id:'test'}; session={code:'123456',playerId:'p'}; localStorage.setItem(membershipKey(),JSON.stringify(session)); g={matchId:'match'};room={revision:9};`);
   await assert.rejects(run(`leaveRoom()`), /已回滚/);
   const button = w.document.querySelector('#retrySettlement');
   assert.equal(button.hidden, false);
@@ -308,7 +336,7 @@ test('manual settlement retry repeats only a confirmed rolled-back operation wit
   assert.deepEqual(JSON.parse(JSON.stringify(requests[1].retry)), retry);
   assert.equal(run('session'), null);
   assert.equal(button.hidden, true);
-  assert.equal(w.localStorage.getItem('wolf.session'), null);
+  assert.equal(w.localStorage.getItem('wolf.session:test'), null);
 });
 
 test('ordinary victim can acknowledge an actual settlement snapshot without a hunter action', async (t) => {

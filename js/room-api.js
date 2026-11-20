@@ -2,12 +2,20 @@
 // never travel over the browser's Supabase table/realtime clients.
 async function gameRequest(op, code, args = {}) {
   const epoch = authEpoch;
-  const { data, error } = await client.functions.invoke('game', { body: { op, code, ...args } });
+  const accountId = profile?.id;
+  const current = (await client.auth.getSession()).data?.session;
+  if (epoch !== authEpoch || !accountId || current?.user?.id !== accountId || !current.access_token) throw new Error('登录状态已变化');
+  const token = current.access_token;
+  const { data, error } = await client.functions.invoke('game', {
+    headers: { Authorization: `Bearer ${token}` }, body: { op, code, ...args, accountId },
+  });
   if (epoch !== authEpoch) throw new Error('登录状态已变化');
   if (error) {
     const status = error.context?.status;
     if (status === 401) {
-      showAuthScreen();
+      const latest = (await client.auth.getSession()).data?.session;
+      if (epoch === authEpoch && latest?.access_token === token) showAuthScreen();
+      else throw new Error('登录凭据已变化，请按当前状态重试');
       throw new Error('登录状态过期，请重新登录');
     }
     let reason = error.message;
@@ -41,26 +49,40 @@ async function joinRoom(_name, code) {
   const result = await gameRequest('join', code);
   if (epoch === authEpoch) enterRoom(result);
 }
+function membershipKey() { return `${SESSION_KEY}:${profile?.id}`; }
+function newerSeat(active) {
+  try {
+    const record = JSON.parse(localStorage.getItem(membershipKey()));
+    return record?.code === active.code && record.playerId !== active.playerId;
+  } catch { return false; }
+}
+window.addEventListener('storage', event => {
+  if (session && event.key === membershipKey() && newerSeat(session)) exitRoomLocal('座位已变化，刷新可恢复新座位');
+});
 async function restoreSession() {
   const epoch = authEpoch;
-  const saved = localStorage.getItem(SESSION_KEY);
+  const ownKey = membershipKey();
+  const key = localStorage.getItem(ownKey) === null ? SESSION_KEY : ownKey;
+  const saved = localStorage.getItem(key);
   if (!saved) return;
   let parsed;
   try {
     parsed = JSON.parse(saved);
   } catch {
-    localStorage.removeItem(SESSION_KEY);
     return;
   }
-  if (!/^\d{6}$/.test(parsed?.code)) {
-    localStorage.removeItem(SESSION_KEY);
+  if (!/^\d{6}$/.test(parsed?.code) || !parsed.playerId) {
     return;
   }
   if (parsed.accountId && parsed.accountId !== profile?.id) return;
   const result = await gameRequest('restore', parsed.code);
-  if (epoch !== authEpoch || session || localStorage.getItem(SESSION_KEY) !== saved) return;
-  if (result.gone) localStorage.removeItem(SESSION_KEY);
-  else enterRoom(result);
+  if (epoch !== authEpoch || session || localStorage.getItem(key) !== saved) return;
+  if (key === SESSION_KEY && (localStorage.getItem(ownKey) !== null || result.playerId !== parsed.playerId)) return;
+  if (result.gone) localStorage.removeItem(key);
+  else {
+    enterRoom(result);
+    if (key === SESSION_KEY && localStorage.getItem(key) === saved) localStorage.removeItem(key);
+  }
 }
 function isPlayerOnline(member) {
   return member?.online !== false;
@@ -71,7 +93,7 @@ function isSeatOnline(seat) {
 
 function applySnapshot(data) {
   if (!session || data.code !== session.code || data.revision < (room?.revision ?? -1)) return;
-  if (data.me?.id !== session.playerId) {
+  if (newerSeat(session) || data.me?.id !== session.playerId) {
     exitRoomLocal('此标签页的座位已失效。刷新可恢复当前座位，或用房间码重新加入。');
     return;
   }
@@ -126,7 +148,8 @@ async function roomCommand(op, args) {
   if (!active) return;
   let data;
   try {
-    data = await gameRequest(op, active.code, args);
+    if (newerSeat(active)) { exitRoomLocal('座位已变化，刷新可恢复新座位'); return; }
+    data = await gameRequest(op, active.code, { ...args, playerId: active.playerId });
   } catch (error) {
     const retry = error.retry;
     if (retry && active === session && retry.matchId === g?.matchId && retry.revision >= room?.revision &&

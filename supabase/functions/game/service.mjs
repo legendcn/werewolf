@@ -77,6 +77,7 @@ async function settle(q, code, g, roster, mode) {
 // returns; any read, scoring, replay or snapshot error rolls everything back.
 export async function dispatch(q, uid, cmd) {
   const { op, code } = cmd;
+  check(cmd.accountId === uid, '登录账号已变化，请刷新');
   const [account] = await q(`select username,role from public.profiles where id=$1 and status='approved'`, [
     uid,
   ]);
@@ -131,6 +132,8 @@ export async function dispatch(q, uid, cmd) {
         (g || cmd.lobbyRevision === Number(room.revision)), '房间或对局已变化，请刷新后重试');
     }
     if (op === 'restore') return { code, playerId: me.id, name: me.name };
+    if (cmd.playerId !== me.id && op === 'snapshot') return { gone: true };
+    check(cmd.playerId === me.id, '房间成员已变化，请刷新');
     await q('update public.players set last_seen=clock_timestamp() where id=$1', [me.id]);
     me.online = true;
   }

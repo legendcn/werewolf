@@ -92,6 +92,7 @@ test('v8 migration and concurrent game transactions', async (t) => {
   assert.equal((await db`select status from profiles where id=${legacy}`)[0].status, 'pending');
   await db`update profiles set status='approved'`;
   const code = '123456';
+  const memberships = new Map();
   const call = (uid, op, opts = {}, inject = () => {}) =>
     db.begin((tx) =>
       dispatch(
@@ -100,9 +101,10 @@ test('v8 migration and concurrent game transactions', async (t) => {
           return tx.unsafe(s, p);
         },
         uid,
-        { code, op, ...opts },
+        { code, op, accountId:uid, playerId:memberships.get(uid), ...opts },
       )
-    );
+    ).then(result => { if (result.playerId) memberships.set(uid,result.playerId); return result; });
+  await assert.rejects(call(ids[0], 'create', { mode:'newbie6', accountId:ids[1] }), /账号已变化/);
   await call(ids[0], 'create', { mode: 'newbie6' });
   for (const id of ids.slice(1, 5)) await call(id, 'join');
   const race = await Promise.allSettled([call(ids[5], 'join'), call(ids[6], 'join')]);
@@ -120,6 +122,8 @@ test('v8 migration and concurrent game transactions', async (t) => {
   assert.ok((await call(ids[2], 'leave', oldSeat)).gone);
   const rejoined = await call(ids[2], 'join');
   assert.notEqual(rejoined.playerId, oldSeat.playerId);
+  assert.ok((await call(ids[2],'snapshot',{playerId:oldSeat.playerId})).gone);
+  await assert.rejects(call(ids[2],'bot',{playerId:oldSeat.playerId}), /成员已变化/);
   const revision = (await call(ids[2], 'snapshot')).revision;
   await assert.rejects(call(ids[2], 'leave', {...oldSeat, lobbyRevision: revision}), /已变化/);
   await assert.rejects(call(ids[2], 'leave', {...oldSeat, playerId: rejoined.playerId}), /已变化/);
