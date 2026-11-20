@@ -308,6 +308,101 @@ test('real DOM accepts a new match and rejects delayed snapshots from the old on
   assert.equal(run('g'), null);
   assert.equal(w.document.querySelector('#watchReplayBtn').hidden, true);
 });
+for (const chatBatch of [false,true]) {
+  test(`new discussion messages wait for earlier drafts on ${chatBatch ? 'current' : 'legacy'} servers`, async t => {
+    const {run,w} = await page(t), sent = [], first = Promise.withResolvers();
+    w.send = (op,args) => { sent.push(args); return sent.length === 1 ? first.promise : Promise.resolve(); };
+    run(`session={code:'123456',playerId:'p'}; room={chatBatch:${chatBatch}};
+      g={matchId:'m',phase:'day',step:'day',day:1,aliveSeats:[1,2],speechOrder:[2,1],speechIndex:0};
+      myRow={seat:1}; roomCommand=send;`);
+    const type = text => { w.text = text; run(`els.chatInput.value=text; els.chatForm.requestSubmit()`); };
+    type('先写的第一条'); type('先写的第二条');
+    assert.equal(sent.length,0);
+    run('g.speechIndex=1;updateChatForm()');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(sent.length,1);
+    type('轮到我之后写的第三条');
+    assert.equal(run('JSON.parse(localStorage.getItem(preSpeechKey())).paused'),true);
+    run('els.endSpeechBtn.click()');
+    assert.equal(sent.length,1);
+    assert.equal(run('els.endSpeechBtn.disabled'),true);
+    first.resolve();
+    await new Promise(resolve=>setImmediate(resolve));
+    const messages = args => Array.from(args.payload.texts || [args.payload.text]);
+    assert.deepEqual(sent.map(messages),chatBatch
+      ? [['先写的第一条','先写的第二条'],['轮到我之后写的第三条']]
+      : [['先写的第一条'],['先写的第二条'],['轮到我之后写的第三条']]);
+    assert.ok(sent.every(m=>m.step==='chat' && m.payload.turn===1));
+    assert.equal(run('pendingSpeechCount()'),0);
+    assert.equal(run('els.endSpeechBtn.disabled'),false);
+  });
+}
+
+test('a discussion batch does not continue sending queued text after a phase change', async t => {
+  const {run,w} = await page(t), sent=[], first=Promise.withResolvers();
+  w.send = (op,args) => { sent.push(args); return first.promise; };
+  run(`session={code:'123456',playerId:'p'}; room={chatBatch:false};
+    g={matchId:'m',phase:'day',step:'day',day:1,aliveSeats:[1],speechOrder:[1],speechIndex:0};
+    myRow={seat:1}; roomCommand=send; queueSpeech('第一条'); queueSpeech('队尾');`);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sent.length,1);
+  run(`g={...g,phase:'lastwords',step:'lastwords',lastWordsSeat:1};updateChatForm()`);
+  first.resolve();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sent.length,1);
+  assert.equal(run('preSpeech.msgs[0]'),'队尾');
+});
+
+test('failed discussion delivery preserves the queue until an explicit retry', async t => {
+  const {run,w} = await page(t), sent=[];
+  w.send = async (op,args) => { sent.push(args.payload.text); if (sent.length === 1) throw new Error('发送失败'); };
+  run(`session={code:'123456',playerId:'p'}; room={chatBatch:true};
+    g={matchId:'m',phase:'day',step:'day',day:1,aliveSeats:[1],speechOrder:[1],speechIndex:0};
+    myRow={seat:1}; roomCommand=send; queueSpeech('保留这一条');`);
+  await new Promise(resolve=>setImmediate(resolve));
+  run('updateChatForm();updateChatForm()');
+  assert.deepEqual(sent,['保留这一条']);
+  assert.equal(run('els.retrySpeechBtn.hidden'),false);
+  run('els.retrySpeechBtn.click()');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(sent,['保留这一条','保留这一条']);
+  assert.equal(run('els.retrySpeechBtn.hidden'),true);
+});
+
+test('vote shows pending immediately, ignores duplicate clicks, and waits for the referee receipt', async t => {
+  const {run,w} = await page(t), sent=[];
+  const snapshot = {
+    code:'123456',revision:10,hostId:'p',options:{mode:'newbie6',g:{matchId:'m',phase:'vote',step:'vote',day:1,aliveSeats:[1,2],voteBanned:[]}},
+    members:[{id:'p',name:'Alice',seat:1,online:true},{id:'q',name:'Bob',seat:2,online:true}],
+    me:{id:'p',seat:1,role:'villager'},channel:'chat',chat:[],wolfPicks:[],submitted:[],
+  };
+  w.snap=snapshot;
+  let result = Promise.withResolvers();
+  w.ask = (op,code,args) => { sent.push([op,args?.step]); return result.promise; };
+  run(`session={code:'123456',playerId:'p'}; ratingsKey='Alice|Bob'; gameRequest=ask; applySnapshot(snap)`);
+  const confirmVote = () => {
+    run('togglePick(2)');
+    const button = [...w.document.querySelectorAll('#actionArea button')].find(b=>b.textContent==='确认');
+    assert.ok(button);
+    button.click(); button.click();
+  };
+  confirmVote();
+  assert.match(run('els.actionArea.textContent'),/正在提交投票/);
+  assert.doesNotMatch(run('els.actionArea.textContent'),/已投票/);
+  await run('pollOnce()');
+  assert.deepEqual(sent,[['act','vote']]);
+  result.reject(new Error('收票失败'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(run('els.toast.textContent'),/收票失败/);
+  assert.doesNotMatch(run('els.actionArea.textContent'),/正在提交/);
+  result = Promise.withResolvers();
+  confirmVote();
+  result.resolve({...snapshot,revision:11,submitted:['1:vote']});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(run('els.actionArea.textContent'),/已投票/);
+  assert.equal(sent.length,2);
+});
+
 test('sending day or wolf chat never announces a submission awaiting settlement', async (t) => {
   const { w, run } = await page(t);
   const sent = [];
@@ -319,7 +414,7 @@ test('sending day or wolf chat never announces a submission awaiting settlement'
       run(`g.phase='night'; g.step='wolves'; myRow.role='werewolf'; submitted.add('1:wolves')`);
     }
     run(`renderActionPanel(null,true); updateChatForm(); els.chatInput.value='测试发言'; els.chatForm.requestSubmit();`);
-    await Promise.resolve();
+    await new Promise(resolve=>setImmediate(resolve));
     assert.equal(sent.at(-1), step);
     assert.equal(w.document.querySelector('#toast').hidden, true);
     assert.doesNotMatch(w.document.querySelector('#actionArea').textContent, /已提交，等待结算/);

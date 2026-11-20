@@ -226,6 +226,8 @@ async function roomCommand(op, args) {
 }
 async function pollOnce() {
   if (!session || document.hidden || polling) return;
+  // Give a just-clicked action priority over the next background request.
+  if (Date.now() - (currentAction()?.startedAt ?? 0) < 1600) return;
   const active = polling = session;
   try {
     if (++pollTick % 8 === 0) refreshProfileQuiet().catch(() => {});
@@ -266,14 +268,37 @@ async function kickMember(member) {
   kickAsked = null;
   return roomCommand('kick', { id: member.id, ...departureContext() });
 }
+let pendingAction = null;
+function actionScene() {
+  return g && [g.matchId, g.day, g.phase, g.step, g.speechIndex, g.policeIndex, g.lastWordsSeat].join(':');
+}
+
+function currentAction() {
+  return pendingAction?.active === session && pendingAction?.scene === actionScene() ? pendingAction : null;
+}
+
 async function act(step, target, payload = {}) {
   if (!g) return false;
+  const active = session;
+  const args = { matchId: g.matchId, day: g.day, step, target: target ?? null, payload };
+  let pending;
+  if (active && step !== 'chat' && step !== 'wolfchat') {
+    if (currentAction()) return false;
+    pending = pendingAction = { active, step, scene: actionScene(), startedAt: Date.now() };
+    renderRoom();
+  }
   try {
-    await roomCommand('act', { matchId: g.matchId, day: g.day, step, target: target ?? null, payload });
-    return true;
+    await roomCommand('act', args);
+    return active === session;
   } catch (e) {
-    toast(friendlyError(e));
+    if (active === session) toast(friendlyError(e));
     return false;
+  } finally {
+    if (pending && pending === pendingAction) {
+      const repaint = currentAction() === pending;
+      pendingAction = null;
+      if (repaint) renderRoom();
+    }
   }
 }
 async function spectateLoad() {

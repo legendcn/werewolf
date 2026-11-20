@@ -10,8 +10,8 @@
   <script defer src="js/config.js?v=1.1.0"></script>
   <script defer src="supabase/functions/_shared/modes.js?v=1.1.0"></script>
   <script defer src="supabase/functions/_shared/rules.js?v=1.1.0"></script>
-  <script defer src="js/room-api.js?v=1.1.0-perf.5"></script>
-  <script defer src="js/app.js?v=1.1.0-perf.4"></script>
+  <script defer src="js/room-api.js?v=1.1.0-perf.6"></script>
+  <script defer src="js/app.js?v=1.1.0-perf.6"></script>
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -305,6 +305,7 @@
               <form id="chatForm" class="input-group input-group-sm mt-2" autocomplete="off">
                 <input id="chatInput" class="form-control" maxlength="200" placeholder="输入发言（回车发送）">
                 <div class="input-group-append">
+                  <button id="retrySpeech" class="btn btn-outline-warning" type="button" hidden>重发待发消息</button>
                   <button id="endSpeech" class="btn btn-outline-secondary" type="button" hidden>结束发言</button>
                   <button class="btn btn-primary" type="submit">发送</button>
                 </div>

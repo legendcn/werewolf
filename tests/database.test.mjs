@@ -105,7 +105,7 @@ test('v8 migration and concurrent game transactions', async (t) => {
         { code, op, accountId:uid, playerId:memberships.get(uid), ...opts },
       )
     ).then(result => { if (result.playerId) memberships.set(uid,result.playerId); return result; });
-  const sync = async (uid, op, viewTag = '') => snapshotResponse({ op, viewTag }, uid, await call(uid, op, { viewTag }));
+  const sync = async (uid, op, viewTag = '', inject) => snapshotResponse({ op, viewTag }, uid, await call(uid, op, { viewTag }, inject));
   await assert.rejects(call(ids[0], 'create', { mode:'newbie6', accountId:ids[1] }), /账号已变化/);
   const created = await call(ids[0], 'create', { mode: 'newbie6', includeSnapshot:true });
   assert.equal(created.snapshot.me.id,created.playerId);
@@ -120,12 +120,18 @@ test('v8 migration and concurrent game transactions', async (t) => {
   assert.deepEqual(short, { code, revision: initialView.revision, viewTag: initialView.viewTag, unchanged:true });
   assert.ok(JSON.stringify(short).length < JSON.stringify(initialView).length);
   await db`update players set last_seen=now()-interval '2 minutes' where id=${created.playerId}`;
-  const presence = await sync(ids[1], 'snapshot', initialView.viewTag);
+  await db`update players set last_seen=now() where id=${joined.playerId}`;
+  let heartbeats = 0;
+  const countHeartbeat = sql => { if (sql.startsWith('update public.players set last_seen=')) heartbeats++; };
+  const presence = await sync(ids[1], 'snapshot', initialView.viewTag, countHeartbeat);
+  assert.equal(heartbeats, 0, 'an already fresh member need not write another heartbeat');
   assert.equal(presence.revision,initialView.revision);
   assert.equal(presence.hostId,joined.playerId);
   assert.equal(presence.members.find(p=>p.id===created.playerId).online,false);
   assert.notEqual(presence.viewTag,initialView.viewTag);
-  await call(ids[0], 'snapshot');
+  const returned = await call(ids[0], 'snapshot', {}, countHeartbeat);
+  assert.equal(heartbeats, 1, 'returning members refresh presence immediately');
+  assert.equal(returned.hostId, created.playerId);
   for (const id of ids.slice(2, 5)) await call(id, 'join');
   const race = await Promise.allSettled([call(ids[5], 'join'), call(ids[6], 'join')]);
   assert.equal(race.filter((r) => r.status === 'fulfilled').length, 1);
@@ -243,6 +249,16 @@ test('v8 migration and concurrent game transactions', async (t) => {
   const order = {day:1, matchId, step:'order', payload:{dir:'ccw'}};
   await assert.rejects(call(wolves[1].account_id,'act',order),/当前不能/);
   assert.equal((await call(wolves[0].account_id,'act',order)).options.g.speechOrder[0],wolves[0].seat);
+  const speech = {day:1, matchId, step:'chat', payload:{turn:0,texts:['先到','其次','最后']}};
+  let chatInserts = 0;
+  const countChatInsert = sql => { if (sql.startsWith('insert into public.game_actions')) chatInserts++; };
+  await assert.rejects(call(wolves[0].account_id,'act',{...speech,payload:{...speech.payload,texts:['不得部分写入','']}}), /当前不能/);
+  await assert.rejects(call(wolves[0].account_id,'act',{...speech,payload:{...speech.payload,turn:1}}), /轮次已变化/);
+  const chatBatch = await call(wolves[0].account_id,'act',speech,countChatInsert);
+  assert.equal(chatBatch.chatBatch,true);
+  assert.ok(!chatBatch.submitted.includes('1:chat'));
+  assert.equal(chatInserts,1);
+  assert.deepEqual(chatBatch.chat.map(row=>row.payload.text),speech.payload.texts);
   // Seed a long discussion and a timed-out vote, then inject a READ failure.
   await db`insert into game_actions(match_id,room_code,day,phase,step,player_id,payload)
     select ${matchId},${code},1,'day','chat',${
@@ -292,7 +308,9 @@ test('v8 migration and concurrent game transactions', async (t) => {
   assert.equal(await replayCountAs(crypto.randomUUID()), '0');
   assert.equal(r.events.filter((e) => e.t === 'policeSignup').length, 6);
   assert.equal(r.events.filter((e) => e.t === 'order').length, 1);
-  assert.equal(r.events.filter((e) => e.t === 'chat').length, 505);
+  const publicMessages = r.events.filter(e => e.t === 'chat');
+  assert.equal(publicMessages.length, 508);
+  assert.deepEqual(publicMessages.slice(0,3).map(e=>e.text),speech.payload.texts);
   assert.ok(r.events.some((e) => e.t === 'wolfchat' && e.text === 'private discussion'));
   assert.equal((await db`select sum(games) n from ratings`)[0].n, '6');
   const rem = await db`select account_id from players where not departed order by joined_at,id`;

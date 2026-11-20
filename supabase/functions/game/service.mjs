@@ -3,6 +3,7 @@ import { hostOf, project, replayEvent, requireGame as check, submit, won } from 
 
 const modeFor = (id) => MODES.find((m) => m.id === id);
 const rosterSQL = `select id, account_id, name, seat, role, alive, is_bot, departed,
+  last_seen <= statement_timestamp()-interval '10 seconds' as heartbeat_due,
   (not departed and (is_bot or last_seen > clock_timestamp()-interval '45 seconds')) as online
   from public.players where room_code=$1 order by joined_at,id`;
 const actionSQL = `select a.id,a.day,a.step,a.phase,p.seat,a.target_seat as target,a.payload,a.created_at
@@ -145,7 +146,8 @@ export async function dispatch(q, uid, cmd) {
     if (cmd.playerId !== me.id && op === 'snapshot') return { gone: true };
     // For entry, the seat was just selected by Auth UID under this room lock.
     check(entry || cmd.playerId === me.id, '房间成员已变化，请刷新');
-    await q('update public.players set last_seen=clock_timestamp() where id=$1', [me.id]);
+    // Keep the 45-second presence window without writing on every poll.
+    if (me.heartbeat_due) await q('update public.players set last_seen=clock_timestamp() where id=$1', [me.id]);
     me.online = true;
   }
   const before = JSON.stringify(g), wasFinished = g?.phase === 'finished';
@@ -209,12 +211,17 @@ export async function dispatch(q, uid, cmd) {
     referee.tick();
   } else check(op === 'spectate', '不支持的操作');
   if (op !== 'reset') g = referee.state;
-  for (const a of referee.pending) {
-    const p = rows.find((p) => p.seat === a.seat);
+  if (referee.pending.length) {
+    const events = referee.pending.map((a, seq) => ({
+      seq, day:a.day, phase:a.phase, step:a.step, player_id:rows.find(p => p.seat === a.seat).id,
+      target_seat:a.target ?? null, payload:a.payload,
+    }));
     await q(
       `insert into public.game_actions(match_id,room_code,day,phase,step,player_id,target_seat,payload)
-      values($1,$2,$3,$4,$5,$6,$7,$8::text::jsonb)`,
-      [g.matchId, code, a.day, a.phase, a.step, p.id, a.target ?? null, JSON.stringify(a.payload)],
+      select $1,$2,a.day,a.phase,a.step,a.player_id,a.target_seat,a.payload
+      from jsonb_to_recordset($3::text::jsonb) as a(seq int,day int,phase text,step text,player_id uuid,target_seat int,payload jsonb)
+      order by a.seq`,
+      [g.matchId, code, JSON.stringify(events)],
     );
   }
   if (g && JSON.stringify(g) !== before) {
@@ -286,10 +293,12 @@ export async function dispatch(q, uid, cmd) {
     })),
     ...(!g && me && privileged ? { appointments: Object.fromEntries(rows.filter(p => p.role).map(p => [p.id, p.role])) } : {}),
     me: me && { id: me.id, seat: me.seat, role: g ? me.role : null },
+    ...(me && { chatBatch: true }),
     chat: chat.reverse(),
     channel,
     submitted: me && g
-      ? actions.filter((a) => a.seat === me.seat && a.day === g.day).map((a) => `${g.day}:${a.step}`)
+      ? actions.filter((a) => a.seat === me.seat && a.day === g.day && a.step !== 'chat' && a.step !== 'wolfchat')
+        .map((a) => `${g.day}:${a.step}`)
       : [],
     wolfPicks: channel === 'wolfchat' && g.step === 'wolves'
       ? actions.filter((a) => a.step === 'wolves' && a.day === g.day).map(({ seat, target }) => ({

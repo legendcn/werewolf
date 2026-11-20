@@ -149,6 +149,7 @@ const els = {
   chatInput: document.querySelector('#chatInput'),
   chatNote: document.querySelector('#chatNote'),
   endSpeechBtn: document.querySelector('#endSpeech'),
+  retrySpeechBtn: document.querySelector('#retrySpeech'),
   modeInfo: document.querySelector('#modeInfo'),
   gameOverCard: document.querySelector('#gameOverCard'),
   winnerText: document.querySelector('#winnerText'),
@@ -216,7 +217,6 @@ let kickAsked = null;
 let appointId = null;
 let preSpeech = { day: 0, msgs: [] };
 let preFlushing = false;
-let preFailedAt = 0;
 let phaseKey = '';
 let feedSeeded = false;
 let profile = null;
@@ -946,7 +946,6 @@ function enterRoom({ code, playerId, name }, firstSnapshot) {
   submitted = new Set();
   pick = null;
   preFlushing = false;
-  preFailedAt = 0;
   loadPreSpeech();
   phaseKey = '';
   feedSeeded = false;
@@ -1694,7 +1693,8 @@ function loadPreSpeech() {
     preSpeech = {
       matchId: raw.matchId,
       day: Number(raw.day) || 0,
-      msgs: raw.msgs.filter((text) => typeof text === 'string' && text.trim()).slice(0, 12),
+      paused: raw.paused === true,
+      msgs: raw.msgs.filter((text) => typeof text === 'string' && text.length <= 200 && text.trim()).slice(0, 12),
     };
   } catch {
     preSpeech = { day: 0, msgs: [] };
@@ -1708,7 +1708,8 @@ function savePreSpeech() {
     localStorage.removeItem(key);
     return;
   }
-  localStorage.setItem(key, JSON.stringify(preSpeech));
+  // A reload during an unacknowledged send must not replay it automatically.
+  localStorage.setItem(key, JSON.stringify({ ...preSpeech, paused: preSpeech.paused || preFlushing }));
 }
 
 function clearPreSpeech() {
@@ -1717,7 +1718,7 @@ function clearPreSpeech() {
 }
 
 function pendingSpeechCount() {
-  return g && preSpeech.day === g.day ? preSpeech.msgs.length : 0;
+  return g && preSpeech.matchId === g.matchId && preSpeech.day === g.day ? preSpeech.msgs.length : 0;
 }
 
 function canPreInput() {
@@ -1728,49 +1729,54 @@ function canPreInput() {
   return myIndex > g.speechIndex;
 }
 
+function myDiscussionTurn() {
+  return g?.phase === 'day' && isAliveSeat(myRow?.seat) && currentSpeaker() === myRow.seat &&
+    !submitted.has(`${g.day}:speech`);
+}
+
 function queueSpeech(text) {
-  if (!g) return;
+  if (text.length > 200) {
+    toast('每条发言最多 200 字');
+    return false;
+  }
   if (preSpeech.day !== g.day || preSpeech.matchId !== g.matchId) preSpeech = { matchId:g.matchId, day:g.day, msgs:[] };
   if (preSpeech.msgs.length >= 12) {
-    toast('先存了 12 条，等轮到你时再接着发');
-    return;
+    toast('待发队列已满，最多 12 条');
+    return false;
   }
   preSpeech.msgs.push(text);
   savePreSpeech();
   renderChat();
   updateChatForm();
-  toast(`已排第 ${preSpeech.msgs.length} 条，轮到你时会自动发出`);
+  return true;
 }
 
 async function flushPreSpeech() {
-  if (preFlushing || !g || g.phase !== 'day') return;
-  if (!preSpeech.msgs.length || preSpeech.day !== g.day) return;
-  if (currentSpeaker() !== myRow?.seat) return;
-  if (submitted.has(`${g.day}:speech`)) return;
-  if (Date.now() - preFailedAt < 5000) return;
+  if (preFlushing || !myDiscussionTurn() || !pendingSpeechCount() || preSpeech.paused || currentAction()) return;
+  const active = session, queue = preSpeech, turn = g.speechIndex;
   preFlushing = true;
-  const active = session;
-  const msgs = preSpeech.msgs.slice();
-  preSpeech.msgs = [];
-  savePreSpeech();
-  renderChat();
-  let failedIndex = -1;
-  for (let i = 0; i < msgs.length; i += 1) {
-    const ok = await act('chat',null,{text:msgs[i]});
-    if (active !== session) return;
-    if (!ok) {
-      failedIndex = i;
-      break;
+  updateChatForm();
+  try {
+    savePreSpeech();
+    while (session === active && preSpeech === queue && myDiscussionTurn() && g.speechIndex === turn && pendingSpeechCount()) {
+      const texts = queue.msgs.slice(0, room?.chatBatch ? 12 : 1);
+      // Leave space for the envelope even if characters expand when JSON escaped.
+      while (JSON.stringify(texts).length > 3500) texts.pop();
+      const ok = await act('chat', null, texts.length === 1 ? { text:texts[0], turn } : { texts, turn });
+      if (session !== active || preSpeech !== queue) return;
+      if (ok) queue.msgs.splice(0, texts.length);
+      else queue.paused = true;
+      savePreSpeech();
+      renderChat();
+      if (!ok) break;
+    }
+  } finally {
+    if (session === active) {
+      preFlushing = false;
+      if (preSpeech === queue) savePreSpeech();
+      updateChatForm();
     }
   }
-  if (failedIndex >= 0) {
-    preFailedAt = Date.now();
-    preSpeech.msgs = msgs.slice(failedIndex).concat(preSpeech.msgs);
-    savePreSpeech();
-  }
-  preFlushing = false;
-  renderChat();
-  updateChatForm();
 }
 
 function renderChat() {
@@ -2148,7 +2154,7 @@ function renderSeats(mode, inGame) {
 }
 
 function togglePick(seat) {
-  if (!pick || !pick.allowed.has(seat)) return;
+  if (currentAction() || !pick || !pick.allowed.has(seat)) return;
   if (pick.selected.includes(seat)) {
     pick.selected = pick.selected.filter((s) => s !== seat);
   } else if (pick.max === 1) {
@@ -2222,6 +2228,14 @@ function renderActionPanel(mode, inGame) {
 
   if (g.phase === 'finished') {
     els.actionArea.append(note('对局已结束。房主可以点下方「再来一局」。'));
+    return;
+  }
+
+  const pending = currentAction();
+  if (pending) {
+    const text = note(['vote','runoff','policeVote','policeRunoff'].includes(pending.step) ? '正在提交投票…' : '正在提交操作…');
+    text.setAttribute('role', 'status');
+    els.actionArea.append(text);
     return;
   }
 
@@ -2812,14 +2826,14 @@ function updateChatForm() {
   if (g && preSpeech.msgs.length && (preSpeech.day !== g.day || preSpeech.matchId !== g.matchId)) clearPreSpeech();
   const wolfNight = Boolean(g) && g.phase === 'night' && isMyWolf() && alive;
   const speechDone = Boolean(g) && submitted.has(`${g.day}:speech`);
-  const myTurn = Boolean(g) && g.phase === 'day' && alive && speaker === myRow?.seat && !speechDone;
+  const myTurn = myDiscussionTurn();
   const preTurn = Boolean(g) && g.phase === 'day' && alive && !myTurn && !speechDone && canPreInput();
   const policeTurn = Boolean(g) && g.phase === 'sheriff' && g.step === 'policeSpeech'
     && (g.policeOrder || [])[g.policeIndex] === myRow?.seat
     && !submitted.has(`${g.day}:policeSpeech`);
   const lastTurn = Boolean(g) && g.phase === 'lastwords' && g.lastWordsSeat === myRow?.seat
     && !submitted.has(`${g.day}:lastwords`);
-  const canChat = wolfNight || myTurn || preTurn || policeTurn || lastTurn;
+  const canChat = !currentAction() && (wolfNight || myTurn || preTurn || policeTurn || lastTurn);
   const pending = myTurn ? pendingSpeechCount() : 0;
   const submitBtn = els.chatForm.querySelector('button[type="submit"]');
 
@@ -2830,9 +2844,12 @@ function updateChatForm() {
     ? '还没轮到你，可以先打字，轮到你时自动发出'
     : lastTurn ? '输入遗言（回车发送）' : '输入发言（回车发送）';
   els.endSpeechBtn.hidden = !myTurn;
-  els.endSpeechBtn.disabled = speechDone;
+  els.endSpeechBtn.disabled = speechDone || preFlushing || Boolean(currentAction()) || (pending > 0 && !preSpeech.paused);
+  els.endSpeechBtn.textContent = pending && preSpeech.paused ? '放弃待发并结束' : '结束发言';
+  els.retrySpeechBtn.hidden = !(pending && preSpeech.paused);
+  els.retrySpeechBtn.disabled = !canChat || preFlushing;
 
-  if (myTurn && pending) setTimeout(flushPreSpeech, 100);
+  if (myTurn && pending && !preSpeech.paused && !preFlushing && !currentAction()) queueMicrotask(flushPreSpeech);
 
   if (!g) {
     els.chatTitle.textContent = '白天发言';
@@ -2852,7 +2869,7 @@ function updateChatForm() {
   } else if (g.phase === 'day') {
     if (!alive) els.chatNote.textContent = '你已出局，只能旁观';
     else if (myTurn) {
-      els.chatNote.textContent = `轮到你（第 ${g.speechIndex + 1} / ${g.speechOrder?.length || 0} 位）${pending ? ` · 先发排队 ${pending} 条` : ''}`;
+      els.chatNote.textContent = `轮到你（第 ${g.speechIndex + 1} / ${g.speechOrder?.length || 0} 位）${pending ? ` · ${preSpeech.paused ? '发送暂停' : '依次发送'}（${pending} 条待发）` : ''}`;
     } else if (speaker === myRow?.seat) els.chatNote.textContent = '已结束发言，等待下一位';
     else if (preTurn) {
       els.chatNote.textContent = `等待 ${pad(speaker)} 号发言 · 可提前打字${pendingSpeechCount() ? `，已排队 ${pendingSpeechCount()} 条` : ''}`;
@@ -2972,7 +2989,7 @@ els.revealBtn.addEventListener('click', () => {
 
 els.chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  if (!g) return;
+  if (!g || currentAction()) return;
   const text = els.chatInput.value.trim();
   if (!text) return;
   const seat = myRow?.seat;
@@ -2988,25 +3005,25 @@ els.chatForm.addEventListener('submit', (event) => {
     act('wolfchat', null, { text });
     return;
   }
-  if (g.phase !== 'day') return;
-  const speaker = currentSpeaker();
-  const speechDone = submitted.has(`${g.day}:speech`);
-  if (speaker === myRow?.seat && !speechDone) {
-    els.chatInput.value = '';
-    act('chat', null, { text });
-    return;
-  }
-  if (speaker != null && canPreInput()) {
-    els.chatInput.value = '';
-    queueSpeech(text);
-    els.chatInput.focus();
-  }
+  if ((myDiscussionTurn() || canPreInput()) && queueSpeech(text)) els.chatInput.value = '';
 });
 
-els.endSpeechBtn.addEventListener('click', () => {
-  if (!g || g.phase !== 'day' || currentSpeaker() !== myRow?.seat) return;
-  els.endSpeechBtn.disabled = true;
-  act('speech', null, { turn: g.speechIndex });
+els.retrySpeechBtn.addEventListener('click', () => {
+  if (!myDiscussionTurn() || currentAction() || !preSpeech.paused) return;
+  preSpeech.paused = false;
+  savePreSpeech();
+  flushPreSpeech();
+});
+
+els.endSpeechBtn.addEventListener('click', async () => {
+  if (!myDiscussionTurn() || preFlushing || currentAction()) return;
+  const active = session, queue = preSpeech, discard = pendingSpeechCount() > 0;
+  if (discard && (!queue.paused || !window.confirm('放弃待发消息并结束本轮发言？'))) return;
+  if (await act('speech', null, { turn: g.speechIndex }) && discard && session === active && preSpeech === queue) {
+    clearPreSpeech();
+    renderChat();
+    updateChatForm();
+  }
 });
 
 els.leaveBtn.addEventListener('click', () => {
