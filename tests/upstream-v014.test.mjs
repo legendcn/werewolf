@@ -116,7 +116,8 @@ for (const choice of ['conceal', 'reveal', 'shoot', 'timeout']) {
     assert.equal(g.phase, 'day');
     assert.equal(g.deadline - now(), 60_000);
     assert.equal(g.log.filter((e) => e.text.includes('天亮了')).length, 1);
-    assert.equal(g.log.some((e) => e.text.includes('翻开猎人牌')), ['reveal', 'shoot'].includes(choice));
+    assert.equal(g.log.some((e) => e.text.includes('翻开猎人牌')), false); // 夜间翻牌/死因不公开
+    assert.ok(!g.log.some((e) => /号出局（/.test(e.text)), '夜死讯不应带死因括号');
     assert.equal(roster.filter((p) => !p.alive).length, choice === 'shoot' ? 2 : 1);
     if (choice === 'timeout') assert.ok(!project(g, null).afk.includes(hunter.seat));
   });
