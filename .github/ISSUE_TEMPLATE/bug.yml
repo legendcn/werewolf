@@ -1,0 +1,26 @@
+name: 报告问题
+description: 报告游戏、界面或部署中的异常
+body:
+  - type: markdown
+    attributes:
+      value: 涉及越权、私密身份或凭据时请按 SECURITY.md 私下报告。不要粘贴真实房间码、令牌或数据库地址。
+  - type: input
+    id: version
+    attributes:
+      label: 版本与环境
+      description: 提交号或页面版本，浏览器；部署问题请区分上游 v8 和服务端 v8。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重现步骤
+      description: 对局问题请写板子、阶段、相关座位和操作顺序，测试昵称即可。
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 实际结果与预期结果
+    validations:
+      required: true

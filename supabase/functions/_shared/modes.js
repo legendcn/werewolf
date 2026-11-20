@@ -25,7 +25,7 @@
     },
     hunter: {
       name: '猎人', camp: 'police', campName: '好人阵营 · 神职',
-      skill: '被狼人杀害或被投票出局时，可以开枪带走一名玩家；被女巫毒杀时不能开枪。',
+      skill: '出局时可选择翻牌开枪、翻牌不开枪，或不翻牌保密。被毒杀、被白狼王自爆带走、被请离或主动离房时不能发动技能。',
     },
     guard: {
       name: '守卫', camp: 'police', campName: '好人阵营 · 神职',
@@ -137,5 +137,5 @@
     return order.map((key) => `${ROLES[key].name} ×${counts[key]}`).join(' · ');
   }
 
-  window.WOLF_MODES = { ROLES, MODES, CAMPS, modeById, summary };
+  globalThis.WOLF_MODES = { ROLES, MODES, CAMPS, modeById, summary };
 })();

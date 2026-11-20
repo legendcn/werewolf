@@ -1,0 +1,21 @@
+{
+  "name": "werewolf",
+  "version": "0.17.0",
+  "private": true,
+  "description": "支持旁观与回放的网页狼人杀，使用 Supabase 服务端裁判。",
+  "scripts": {
+    "start": "node server.js",
+    "preview:offline": "node server.js --offline",
+    "test": "node --test tests/*.test.mjs",
+    "check:edge": "deno check --no-lock --node-modules-dir=manual supabase/functions/game/index.ts",
+    "build": "node scripts/build-site.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "embedded-postgres": "18.7.0-beta.19",
+    "jsdom": "26.1.0",
+    "postgres": "3.4.7"
+  }
+}

@@ -1,2 +1,49 @@
+# Node / Deno 的依赖与本地缓存；锁文件随源码提交
 node_modules/
+/.npm/
+/.deno/
+/.deno_dir/
+/.cache/
+*.tsbuildinfo
+
+# 静态发布产物、测试输出和临时预览
+/dist/
+coverage/
+.nyc_output/
+/tmp/
+*.log
+npm-debug.log*
 .preview-*.png
+
+# 本机环境与凭据；保留可公开的配置示例
+.env
+.env.*
+!.env.example
+!.env.*.example
+.pgpass
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Supabase CLI 状态、PostgreSQL 数据与备份（不要忽略迁移 .sql）
+/supabase/.temp/
+/supabase/.branches/
+/pgdata/
+/backups/
+/supabase/backups/
+/*.dump
+/*.sql.gz
+/supabase/*.dump
+/supabase/*.sql.gz
+
+# 操作系统及编辑器杂项；允许共享 VS Code 扩展推荐
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+/.vscode/*
+!/.vscode/extensions.json

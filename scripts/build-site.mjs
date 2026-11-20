@@ -1,0 +1,29 @@
+import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+// Do not publish the repository root: js/config.js is public, SQL and the referee are not site assets.
+const files = [
+  '.nojekyll', 'index.html', 'rules.html', 'styles.css', 'THIRD_PARTY_NOTICES.md',
+  'js/config.js', 'js/room-api.js', 'js/app.js',
+  'supabase/functions/_shared/modes.js', 'supabase/functions/_shared/rules.js',
+  'vendor/bootstrap.min.css', 'vendor/supabase.js',
+  'vendor/licenses/bootstrap.txt', 'vendor/licenses/supabase-js.txt', 'vendor/licenses/phoenix.txt',
+  'vendor/licenses/iceberg-js.txt', 'vendor/licenses/tslib.txt', 'vendor/licenses/tslib-copyright.txt',
+];
+
+export async function buildSite(workDir = root) {
+  const out = join(workDir, 'dist');
+  await rm(out, { recursive: true, force: true });
+  for (const file of files) {
+    const dest = join(out, file);
+    await mkdir(dirname(dest), { recursive: true });
+    await copyFile(join(root, file), dest);
+  }
+  return out;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  console.log(`静态站目录：${await buildSite()}`);
+}

@@ -7,6 +7,17 @@ body {
 
 .uoj-content { min-height: 250px; }
 
+/* Standalone, printable rulebook; no JS or account needed. */
+.rulebook { max-width: 54rem; line-height: 1.75; }
+.rulebook h1 { font-size: 2rem; }
+.rulebook h2 { font-size: 1.4rem; margin: 2rem 0 .75rem; }
+.rulebook li, .rulebook dd { margin-bottom: .45rem; }
+.rulebook .rule-example { padding: .75rem 1rem; background: #f4f6fa; border-left: 3px solid #576c90; }
+@media print {
+  .rulebook nav, .rulebook footer, .rulebook header > a { display: none; }
+  .rulebook h2, .rulebook dt { break-after: avoid; }
+}
+
 .navbar-nav.flex-row .nav-link {
   padding-left: 0.75rem;
   padding-right: 0.75rem;

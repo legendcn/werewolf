@@ -1,0 +1,16 @@
+name: 功能或板规建议
+description: 提议新玩法或改进现有流程
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 哪种场景需要改进？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望怎样处理？
+      description: 若是规则改动，请举一局的例子，并说明与当前规则的差别。
+    validations:
+      required: true

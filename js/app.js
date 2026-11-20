@@ -47,19 +47,6 @@ const STEP_LABEL = {
   lastwords: '遗言',
 };
 
-const REASON_LABEL = {
-  wolf: '（被狼人杀害）',
-  poison: '（被女巫毒杀）',
-  vote: '（被投票放逐）',
-  hunter: '（被猎人带走）',
-  duel: '（决斗出局）',
-  lover: '（殉情）',
-  charm: '（被狼美人带走）',
-  explode: '（被白狼王自爆带走）',
-  selfboom: '（自爆出局）',
-  kick: '（被站长请离）',
-};
-
 const DEATH_SHORT = {
   wolf: '被狼刀',
   poison: '被毒杀',
@@ -71,6 +58,7 @@ const DEATH_SHORT = {
   explode: '自爆带走',
   selfboom: '自爆出局',
   kick: '被站长请离',
+  leave: '离开房间',
 };
 
 const els = {
@@ -166,7 +154,7 @@ const els = {
   revealBody: document.querySelector('#revealBody'),
   replayBtn: document.querySelector('#replayBtn'),
   watchReplayBtn: document.querySelector('#watchReplayBtn'),
-  saveReplayBtn: document.querySelector('#saveReplayBtn'),
+  retrySettlement: document.querySelector('#retrySettlement'),
   leaveBtn: document.querySelector('#leaveRoom'),
   spectateBtn: document.querySelector('#spectateBtn'),
   spectateView: document.querySelector('#spectateView'),
@@ -174,11 +162,11 @@ const els = {
   spectateExit: document.querySelector('#spectateExit'),
   spectateReplayBtn: document.querySelector('#spectateReplayBtn'),
   spectateStatusBar: document.querySelector('#spectateStatusBar'),
-  spectateNote: document.querySelector('#spectateNote'),
   spectatePhase: document.querySelector('#spectatePhase'),
   spectateClock: document.querySelector('#spectateClock'),
   spectateCount: document.querySelector('#spectateCount'),
   spectatePrompt: document.querySelector('#spectatePrompt'),
+  spectateNote: document.querySelector('#spectateNote'),
   spectateMode: document.querySelector('#spectateMode'),
   spectateSeats: document.querySelector('#spectateSeats'),
   spectateChat: document.querySelector('#spectateChat'),
@@ -205,7 +193,6 @@ const configured = Boolean(
 const client = configured ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY) : null;
 
 let session = null;
-let channel = null;
 let pollTimer = null;
 let pollTick = 0;
 let busy = false;
@@ -215,16 +202,9 @@ let myRow = null;
 let roleShown = false;
 let localFeed = [];
 let g = null;
-let hostRoles = [];
-let allRoles = [];
-let hostTimer = null;
-let hostBusy = false;
 let wolfPicks = [];
 let chatRows = [];
 let wolfChatRows = [];
-let presenceReady = false;
-let onlineIds = new Set();
-let knownOnline = new Set();
 let ratings = new Map();
 let ratingsKey = '';
 let leaderboardData = [];
@@ -232,9 +212,6 @@ let submitted = new Set();
 let pick = null;
 let kickAsked = null;
 let appointId = null;
-let lobbyRoles = new Map();
-let selfExited = false;
-let botBusy = false;
 let preSpeech = { day: 0, msgs: [] };
 let preFlushing = false;
 let preFailedAt = 0;
@@ -246,13 +223,11 @@ let pendingTimer = null;
 let approvedRouted = false;
 let spectate = null;
 let spectateTimer = null;
-let spectateBusy = false;
 let replayData = null;
 let replayFilter = 'all';
 let historyRows = [];
-let historyError = '';
-let historyLoading = false;
-let spectateFailures = 0;
+let historyAccount = null;
+let historyRequest = null;
 
 let toastTimer;
 function toast(message) {
@@ -304,9 +279,7 @@ function closeAuthModal() {
 }
 
 function showRoom() {
-  stopSpectate();
-  spectate = null;
-  setSpectateNote('');
+  endSpectate();
   els.homeView.hidden = true;
   els.roomView.hidden = false;
   els.spectateView.hidden = true;
@@ -319,9 +292,7 @@ function showHome() {
   els.homeView.hidden = false;
   els.spectateView.hidden = true;
   els.replayView.hidden = true;
-  stopSpectate();
-  spectate = null;
-  setSpectateNote('');
+  endSpectate();
   closeAccountMenu();
   updateHomeRoomCard();
   if (client && accountApproved()) {
@@ -341,7 +312,7 @@ function updateHomeRoomCard() {
   if (!inRoom) return;
   els.activeRoomCode.textContent = session.code;
   els.activeRoomNote.textContent = isHost()
-    ? '你是房主，对局引擎会在后台继续运行；审核完点「返回对局」即可继续。'
+    ? '你是房主。对局由服务端判定，点「返回对局」可继续。'
     : '对局还在进行，审核完点「返回对局」即可继续。';
 }
 
@@ -365,7 +336,8 @@ function readName() {
 }
 
 const NAME_RE = /^[\u4e00-\u9fa5A-Za-z0-9_]{2,12}$/;
-const OWNER_NAME = 'legendcn';
+let adminPage = 0;
+let adminRequest = 0;
 
 async function sha256Hex(text) {
   if (!window.crypto?.subtle) throw new Error('浏览器不支持加密接口，请用 Chrome / Edge 打开');
@@ -387,7 +359,7 @@ function isAdminAccount() {
 }
 
 function isOwnerAccount() {
-  return accountApproved() && profile.username === OWNER_NAME;
+  return accountApproved() && profile.role === 'owner';
 }
 
 function roleLabel(role) {
@@ -428,12 +400,6 @@ function friendlyAuthError(error) {
     return 'Supabase 的「邮箱确认」还开着：请站长到 Authentication → Sign In / Providers → Email，把 Confirm email 关掉并保存，然后重新注册';
   }
   if (/rate limit|too many/i.test(message)) return '操作太频繁，等一分钟再试';
-  if (/is_bot|profiles_status_check/i.test(message)) {
-    return '数据库还没升级：先在 Supabase SQL Editor 运行 supabase/migration-v6.sql';
-  }
-  if (/profiles|username_taken/i.test(message)) {
-    return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
-  }
   return friendlyError(error);
 }
 
@@ -448,6 +414,15 @@ function applyAccountUI() {
   els.adminCard.hidden = !(approved && isAdminAccount());
   els.createBtn.disabled = busy || !approved;
   els.joinBtn.disabled = busy || !approved;
+
+  const owner = approved ? profile.id : null;
+  if (owner !== historyAccount) {
+    historyAccount = owner;
+    historyRequest = null;
+    historyRows = [];
+    renderHistory();
+  }
+  if (!approved && spectate) showHome();
 
   els.accountBtn.textContent = has ? `${profile.username} ▾` : '登录 / 注册';
   els.accountTopName.textContent = has ? profile.username : '游客';
@@ -535,12 +510,13 @@ async function afterApproved() {
   loadHistory();
   try {
     await restoreSession();
-  } catch {
-    localStorage.removeItem(SESSION_KEY);
+  } catch (error) {
+    setStatus('房间暂时无法恢复，重连信息已保留。刷新可重试。');
+    toast(friendlyError(error));
   }
 }
 
-async function fetchProfileAndRoute() {
+async function fetchProfileAndRoute(allowRepair = true) {
   const { data: userData, error: userError } = await client.auth.getUser();
   if (userError) throw userError;
   if (!userData?.user) {
@@ -555,14 +531,19 @@ async function fetchProfileAndRoute() {
   if (error) {
     showAuthProblem(
       '账号系统未就绪',
-      `读取账号资料失败：${friendlyError(error)}。请先在 Supabase SQL Editor 运行 supabase/migration-v5.sql。`
+      `读取账号资料失败：${friendlyError(error)}`
     );
     return false;
   }
   if (!data) {
+    const n = localStorage.getItem(NAME_KEY);
+    if (allowRepair && n && NAME_RE.test(n)) {
+      const repair = await client.rpc('repair_wolf_profile', { n });
+      if (!repair.error) return fetchProfileAndRoute(false);
+    }
     showAuthProblem(
       '账号资料缺失',
-      '数据库里没有你的账号资料。请先在 Supabase 运行 supabase/migration-v5.sql，或联系站长。'
+      '未找到账号资料。请用原用户名重新登录以恢复资料，或联系站长检查 v8 迁移。'
     );
     return false;
   }
@@ -636,16 +617,20 @@ function adminMessageRow(text, cls) {
 async function loadAdmin() {
   if (!isAdminAccount()) return;
   els.adminBody.replaceChildren(adminMessageRow('加载中…', 'text-muted'));
-  const { data, error } = await client
-    .from('profiles')
-    .select('id, username, role, status, created_at')
-    .order('created_at', { ascending: true })
-    .limit(200);
+  const request = ++adminRequest;
+  const size = 50;
+  let query = client.from('profiles').select('id, username, role, status, created_at');
+  if (document.querySelector('#adminFilter').value === 'pending') query = query.eq('status','pending');
+  const {data,error} = await query.order('created_at').order('id').range(adminPage*size,(adminPage+1)*size);
+  if (request !== adminRequest || !isAdminAccount()) return;
+  document.querySelector('#adminPrev').disabled = adminPage === 0;
+  document.querySelector('#adminNext').disabled = !data || data.length <= size;
+  document.querySelector('#adminPage').textContent = `第 ${adminPage+1} 页`;
   if (error) {
     els.adminBody.replaceChildren(adminMessageRow(`读取失败：${friendlyError(error)}`, 'text-danger'));
     return;
   }
-  const rows = data || [];
+  const rows = (data || []).slice(0,size);
   if (!rows.length) {
     els.adminBody.replaceChildren(adminMessageRow('还没有注册用户', 'text-muted'));
     return;
@@ -683,7 +668,7 @@ async function loadAdmin() {
 
     const actTd = document.createElement('td');
     actTd.className = 'text-right';
-    if (row.username === OWNER_NAME) {
+    if (row.role === 'owner') {
       actTd.textContent = '—';
     } else if (row.status === 'banned') {
       if (isOwnerAccount()) {
@@ -740,12 +725,8 @@ function currentMode() {
   return modeById(g?.mode || room?.options?.mode || 'std12');
 }
 
-function roomPhase() {
-  return room?.options?.phase || 'waiting';
-}
-
 function isHost() {
-  return members.length > 0 && members[0].id === session?.playerId;
+  return Boolean(session && room?.hostId === session.playerId);
 }
 
 function aliveSet() {
@@ -764,15 +745,6 @@ function currentSpeaker() {
 
 function isMyWolf() {
   return Boolean(myRow?.role && Rules.isWolfRole(myRow.role));
-}
-
-function roleSeat(role) {
-  const row = hostRoles.find((r) => r.role === role);
-  return row ? row.seat : null;
-}
-
-function rowBySeat(seat) {
-  return hostRoles.find((r) => r.seat === seat) || null;
 }
 
 function note(text) {
@@ -796,165 +768,8 @@ function canKickMember(member) {
   if (!isOwnerAccount() || !session) return false;
   if (!member || member.id === session.playerId) return false;
   if (g && g.phase === 'finished') return false;
-  if (g && g.phase !== 'finished' && member.id === members[0]?.id) return false;
+  if (g && g.phase !== 'finished' && member.id === room?.hostId) return false;
   return true;
-}
-
-async function kickMember(member) {
-  if (!session || !isOwnerAccount() || !member) return;
-  kickAsked = null;
-  if (g && g.phase !== 'finished') {
-    if (!member.seat) {
-      toast('这名玩家还没分到座位');
-      renderRoom();
-      return;
-    }
-    const { error } = await client.from('game_actions').insert({
-      room_code: session.code,
-      day: g.day,
-      step: 'kick',
-      player_id: session.playerId,
-      target_seat: member.seat,
-      payload: { kick: true },
-    });
-    if (error) {
-      toast(friendlyError(error));
-      renderRoom();
-      return;
-    }
-    toast(`已请求踢出 ${member.name}，等房主结算`);
-    renderRoom();
-    if (isHost()) setTimeout(hostTick, 200);
-    return;
-  }
-  const { error } = await client.from('players').delete().eq('id', member.id);
-  if (error) {
-    toast(friendlyError(error));
-    renderRoom();
-    return;
-  }
-  toast(`已把 ${member.name} 请出房间`);
-  await loadMembers();
-}
-
-function rolePoolOf(mode) {
-  const pool = new Map();
-  mode.roles.forEach((role) => pool.set(role, (pool.get(role) || 0) + 1));
-  return pool;
-}
-
-function rolesUsedByOthers(memberId) {
-  const used = new Map();
-  lobbyRoles.forEach((role, ownerId) => {
-    if (ownerId !== memberId && role) used.set(role, (used.get(role) || 0) + 1);
-  });
-  return used;
-}
-
-async function loadLobbyRoles() {
-  if (!session || g || !isOwnerAccount()) return;
-  const { data, error } = await client
-    .from('players')
-    .select('id, role')
-    .eq('room_code', session.code);
-  if (error || !session || g) return;
-  lobbyRoles = new Map((data || []).map((row) => [row.id, row.role || null]));
-}
-
-async function appointRole(member, role) {
-  if (!session || g || !isOwnerAccount() || !member) return;
-  appointId = null;
-  if (role) {
-    const pool = rolePoolOf(currentMode());
-    if (!pool.has(role)) {
-      toast('这个板子里没有这个角色');
-      renderRoom();
-      return;
-    }
-    const used = rolesUsedByOthers(member.id);
-    if ((used.get(role) || 0) >= pool.get(role)) {
-      toast(`「${ROLES[role]?.name || role}」的名额已经钦定完了`);
-      renderRoom();
-      return;
-    }
-  }
-  const { error } = await client.from('players').update({ role: role || null }).eq('id', member.id);
-  if (error) {
-    toast(friendlyError(error));
-    renderRoom();
-    return;
-  }
-  lobbyRoles.set(member.id, role);
-  toast(role ? `已钦定 ${member.name} 为「${ROLES[role]?.name || role}」` : `已取消 ${member.name} 的钦定`);
-  renderRoom();
-}
-
-function appointControls(member, mode) {
-  const wrap = document.createElement('div');
-  wrap.className = 'sr-kick sr-appoint';
-  const fixed = lobbyRoles.get(member.id) || null;
-  if (appointId !== member.id) {
-    wrap.append(makeBtn(fixed ? '改钦定' : '钦定', 'btn-outline-dark', () => {
-      appointId = member.id;
-      renderRoom();
-    }));
-    return wrap;
-  }
-  const select = document.createElement('select');
-  select.className = 'form-control form-control-sm sr-rolepick';
-  const blank = document.createElement('option');
-  blank.value = '';
-  blank.textContent = '不钦定（随机）';
-  select.append(blank);
-  const pool = rolePoolOf(mode);
-  const used = rolesUsedByOthers(member.id);
-  const seen = new Set();
-  mode.roles.forEach((role) => {
-    if (seen.has(role)) return;
-    seen.add(role);
-    const left = (pool.get(role) || 0) - (used.get(role) || 0);
-    if (left <= 0 && fixed !== role) return;
-    const option = document.createElement('option');
-    option.value = role;
-    option.textContent = `${ROLES[role]?.name || role}（剩 ${left}）`;
-    select.append(option);
-  });
-  select.value = fixed || '';
-  select.addEventListener('change', () => {
-    appointRole(member, select.value || null).catch((error) => toast(friendlyError(error)));
-  });
-  const cancel = makeBtn('取消', 'btn-outline-secondary', () => { appointId = null; renderRoom(); });
-  wrap.append(select, cancel);
-  return wrap;
-}
-
-async function addBot() {
-  if (!session || g || !isOwnerAccount() || botBusy) return;
-  const total = currentMode().roles.length;
-  if (members.length >= total) {
-    toast('房间已经满员');
-    return;
-  }
-  botBusy = true;
-  try {
-    const names = new Set(members.map((m) => m.name));
-    let n = 1;
-    while (names.has(`人机${n}`)) n += 1;
-    const { error } = await client.from('players').insert({ room_code: session.code, name: `人机${n}`, is_bot: true });
-    if (error) {
-      toast(friendlyError(error));
-      return;
-    }
-    toast(`已添加人机${n}：由房主引擎代为行动，不会发言`);
-    await loadMembers();
-  } finally {
-    botBusy = false;
-  }
-}
-
-function isBotSeat(seat) {
-  const row = rowBySeat(seat);
-  return Boolean(row?.is_bot);
 }
 
 function fillModeSelect() {
@@ -975,70 +790,8 @@ function updateModeHint() {
   els.modeHint.textContent = `${mode.desc} 需 ${mode.roles.length} 人。`;
 }
 
-async function createRoom(name) {
-  const mode = modeById(els.modeSelect.value);
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const code = randomCode();
-    const { error } = await client
-      .from('rooms')
-      .insert({ code, options: { mode: mode.id, phase: 'waiting' } });
-    if (!error) {
-      const { data: player, error: playerError } = await client
-        .from('players')
-        .insert({ room_code: code, name })
-        .select('id')
-        .single();
-      if (playerError) throw playerError;
-      enterRoom({ code, playerId: player.id, name });
-      return;
-    }
-    if (error.code !== '23505') throw error;
-  }
-  throw new Error('房间码生成失败，请重试');
-}
-
-async function joinRoom(name, code) {
-  const { data: roomRow, error } = await client
-    .from('rooms')
-    .select('code, options')
-    .eq('code', code)
-    .maybeSingle();
-  if (error) throw error;
-  if (!roomRow) throw new Error('房间不存在，检查一下房间码');
-
-  const mode = modeById(roomRow.options?.mode || 'std12');
-  if (roomRow.options?.phase && roomRow.options.phase !== 'waiting') {
-    throw new Error('这局已经开始了，等下一局吧');
-  }
-
-  const { count, error: countError } = await client
-    .from('players')
-    .select('*', { count: 'exact', head: true })
-    .eq('room_code', code);
-  if (countError) throw countError;
-  if ((count || 0) >= mode.roles.length) {
-    throw new Error(`房间已满（${mode.name}固定 ${mode.roles.length} 人）`);
-  }
-
-  const { count: sameName, error: sameError } = await client
-    .from('players')
-    .select('*', { count: 'exact', head: true })
-    .eq('room_code', code)
-    .eq('name', name);
-  if (sameError) throw sameError;
-  if ((sameName || 0) > 0) throw new Error('房间里已有同名玩家，换个昵称再进');
-
-  const { data: player, error: playerError } = await client
-    .from('players')
-    .insert({ room_code: code, name })
-    .select('id')
-    .single();
-  if (playerError) throw playerError;
-
-  enterRoom({ code, playerId: player.id, name });
-}
-
 function enterRoom(nextSession) {
+  clearSettlementRetry();
   session = nextSession;
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   els.roomCodeLabel.textContent = session.code;
@@ -1046,15 +799,10 @@ function enterRoom(nextSession) {
   members = [];
   myRow = null;
   g = null;
-  hostRoles = [];
-  allRoles = [];
   roleShown = false;
   localFeed = [];
   chatRows = [];
   wolfChatRows = [];
-  presenceReady = false;
-  onlineIds = new Set();
-  knownOnline = new Set();
   ratings = new Map();
   ratingsKey = '';
   submitted = new Set();
@@ -1068,10 +816,7 @@ function enterRoom(nextSession) {
   showRoom();
   updateHomeRoomCard();
   setConn('连接中…');
-  loadRoom();
-  loadMembers();
-  loadLobbyRoles().then(() => { if (session) renderRoom(); });
-  subscribeRoom();
+  pollOnce();
   startPolling();
 }
 
@@ -1093,72 +838,6 @@ function resetRoomView() {
   renderFeed();
 }
 
-function subscribeRoom() {
-  if (channel) channel.unsubscribe();
-  const code = session.code;
-  channel = client
-    .channel(`room:${code}`, { config: { presence: { key: session.playerId } } })
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'players', filter: `room_code=eq.${code}` },
-      (payload) => {
-        if (!session) return;
-        if (payload.eventType === 'INSERT') localFeed.push(`${payload.new.name} 加入了房间`);
-        if (payload.eventType === 'DELETE') localFeed.push(`${payload.old.name} 离开了房间`);
-        loadMembers();
-        renderFeed();
-      }
-    )
-    .on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `code=eq.${code}` },
-      (payload) => {
-        if (!session) return;
-        applyRoom(payload.new);
-      }
-    )
-    .on('presence', { event: 'sync' }, () => applyPresence())
-    .on('presence', { event: 'join' }, () => applyPresence())
-    .on('presence', { event: 'leave' }, () => applyPresence())
-    .subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        setConn('已连接 · 实时同步中', true);
-        try {
-          await channel.track({ player: session.playerId, name: session.name });
-        } catch {
-          // 离线检测失败时按“在线”处理，不影响对局
-        }
-        applyPresence();
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        setConn('实时连接异常，可尝试退出重进');
-      }
-    });
-}
-
-function applyPresence() {
-  if (!channel || !session) return;
-  const state = channel.presenceState() || {};
-  const ids = new Set();
-  Object.values(state).forEach((list) => {
-    (list || []).forEach((meta) => { if (meta.player) ids.add(meta.player); });
-  });
-  presenceReady = true;
-  onlineIds = ids;
-  ids.forEach((id) => knownOnline.add(id));
-  renderRoom();
-}
-
-function isPlayerOnline(row) {
-  if (!row) return true;
-  if (!presenceReady || !knownOnline.has(row.id)) return true;
-  return onlineIds.has(row.id);
-}
-
-function isSeatOnline(seat) {
-  const row = (hostRoles.length ? hostRoles : members).find((item) => item.seat === seat);
-  return row ? isPlayerOnline(row) : true;
-}
-
 function startPolling() {
   stopPolling();
   pollTimer = setInterval(pollOnce, 1600);
@@ -1172,129 +851,6 @@ function stopPolling() {
 }
 
 let polling = false;
-
-async function pollOnce() {
-  if (!session || document.hidden || polling) return;
-  polling = true;
-  try {
-    pollTick += 1;
-    if (pollTick % 8 === 0) refreshProfileQuiet().catch(() => {});
-    await loadRoom();
-    if (!session) return;
-    if (pollTick % 2 === 0) await loadMembers();
-    if (!g) {
-      if (isOwnerAccount()) await loadLobbyRoles();
-      return;
-    }
-    if (g.phase === 'finished') return;
-    await loadMyRole();
-    if (!g) return;
-    await loadChat();
-    if (g.phase === 'night' && g.step === 'wolves' && myRow?.role && Rules.isWolfRole(myRow.role)) {
-      await loadWolfPicks();
-    }
-  } finally {
-    polling = false;
-  }
-}
-
-async function loadRoom() {
-  if (!session) return;
-  const { data, error } = await client
-    .from('rooms')
-    .select('code, options')
-    .eq('code', session.code)
-    .maybeSingle();
-  if (!session) return;
-  if (error) return;
-  if (!data) {
-    session = null;
-    stopPolling();
-    stopHost();
-    localStorage.removeItem(SESSION_KEY);
-    showHome();
-    setStatus('房间已关闭');
-    return;
-  }
-  applyRoom(data);
-}
-
-function applyRoom(row) {
-  if (!row) return;
-  // 房主正在判定时，轮询回来的旧快照不能覆盖本地的权威状态
-  if (isHost() && hostBusy) return;
-  const incomingG = row.options?.g || null;
-  if (g) {
-    if (incomingG) {
-      if ((incomingG.v || 0) < (g.v || 0)) return;
-    } else if (row.options?.phase === 'waiting') {
-      if (g.phase !== 'finished') return;
-    } else {
-      return;
-    }
-  }
-  if (!feedSeeded) {
-    const mode = modeById(row.options?.mode || 'std12');
-    localFeed.push(`房间 ${session?.code} · ${mode.name}（${mode.roles.length} 人）`);
-    localFeed.push('把房间码发给朋友，满员后房主开牌');
-    feedSeeded = true;
-  }
-  const previousKey = phaseKey;
-  room = row;
-  g = row.options?.g || null;
-  const nextKey = g ? `${g.phase}:${g.step}:${g.day}` : `lobby:${row.options?.phase || 'waiting'}`;
-  if (nextKey !== previousKey) {
-    phaseKey = nextKey;
-    pick = null;
-    kickAsked = null;
-    submitted = new Set();
-    if (g && g.phase === 'finished') loadAllRoles();
-  }
-  if (g && g.phase !== 'finished') manageHost();
-  else stopHost();
-  renderRoom();
-  renderGameOver();
-}
-
-function startHost() {
-  stopHost();
-  hostTimer = setInterval(hostTick, 900);
-}
-
-function stopHost() {
-  if (hostTimer) {
-    clearInterval(hostTimer);
-    hostTimer = null;
-  }
-}
-
-function manageHost() {
-  if (isHost()) {
-    if (!hostTimer) startHost();
-  } else {
-    stopHost();
-  }
-}
-
-async function loadMembers() {
-  if (!session) return;
-  const { data, error } = await client
-    .from('players')
-    .select('id, name, joined_at, seat, alive, is_bot')
-    .eq('room_code', session.code)
-    .order('joined_at', { ascending: true });
-  if (error || !session) return;
-  members = data || [];
-  if (members.length && !members.some((m) => m.id === session.playerId)) {
-    exitRoomLocal('你已被站长请出房间');
-    return;
-  }
-  renderRoom();
-  const namesKey = [...new Set(members.filter((m) => !m.is_bot).map((m) => m.name))].sort().join('|');
-  if (namesKey && namesKey !== ratingsKey) {
-    loadRatings().then(() => { if (session) renderRoom(); });
-  }
-}
 
 async function loadRatings() {
   if (!session || !members.length) return;
@@ -1342,7 +898,7 @@ function renderLeaderboard(failed = false) {
     const td = document.createElement('td');
     td.colSpan = 5;
     td.className = 'text-center text-muted py-3';
-    td.textContent = '排行榜暂不可用（先在 Supabase 运行 migration-v4.sql）';
+    td.textContent = '排行榜暂不可用，请稍后重试或联系站长检查部署。';
     tr.append(td);
     frag.append(tr);
     els.leaderboardBody.replaceChildren(frag);
@@ -1410,53 +966,43 @@ function formatWhen(iso) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
-function historyHint(message) {
-  if (/permission denied|42501/i.test(message)) {
-    return '没有权限读取回放：请在 Supabase SQL Editor 运行 supabase/migration-v8.sql';
-  }
-  if (/does not exist|PGRST205|42P01|Could not find the table|schema cache/i.test(message)) {
-    return '历史回放表还没建好：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
-  }
-  if (/fetch|network|Load failed|Failed to fetch|timeout/i.test(message)) {
-    return '网络连不上服务器：检查加速器后点「刷新」重试';
-  }
-  if (/JWT|401|Invalid token|not authenticated|session/i.test(message)) {
-    return '登录状态过期：请退出登录再重新登录';
-  }
-  return `历史读取失败：${message}`;
+function replayReadHint(error) {
+  const message = String(error?.message || error || '未知错误');
+  const detail = `${error?.code || ''} ${message}`;
+  if (/JWT|401|PGRST30[123]|invalid token|not authenticated/i.test(detail)) return '登录状态异常，请重新登录';
+  if (/42501|403|permission denied|row-level security/i.test(detail)) return '没有回放读取权限，请确认账号已审核，并请站长检查回放只读策略';
+  if (/42P01|PGRST205|does not exist|schema cache|could not find the table/i.test(detail)) return '找不到回放表，请站长按 DEPLOYMENT.md 检查迁移和接口缓存';
+  if (/fetch|network|Load failed|timeout/i.test(detail)) return '网络连接失败，请检查连接后重试';
+  return `回放读取失败：${message}`;
 }
 
-async function loadHistory(attempt = 0) {
-  if (!client || !accountApproved()) return;
-  if (historyLoading) return;
-  historyLoading = true;
+async function loadHistory() {
+  if (!client || !accountApproved() || historyRequest) return;
+  const request = historyRequest = {};
   if (!historyRows.length) els.historyNote.textContent = '加载中…';
-  let failure = null;
   try {
-    const { data, error } = await client
-      .from('replays')
-      .select('id, room_code, mode_name, winner, days, finished_at')
-      .order('finished_at', { ascending: false })
-      .limit(20);
-    if (error) throw error;
-    historyRows = data || [];
-    historyError = '';
-    renderHistory();
-  } catch (error) {
-    failure = error;
+    for (let attempt = 0; attempt < 3 && request === historyRequest; attempt++) {
+      try {
+        const { data, error } = await client.from('replays')
+          .select('id, room_code, mode_name, winner, days, finished_at')
+          .order('finished_at', { ascending: false }).limit(20);
+        if (error) throw error;
+        if (request !== historyRequest) return;
+        historyRows = data || [];
+        renderHistory();
+        return;
+      } catch (error) {
+        if (request !== historyRequest) return;
+        if (attempt === 2) renderHistory(replayReadHint(error));
+        else await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
+      }
+    }
   } finally {
-    historyLoading = false;
+    if (request === historyRequest) historyRequest = null;
   }
-  if (!failure) return;
-  if (attempt < 2) {
-    await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
-    return loadHistory(attempt + 1);
-  }
-  historyError = String(failure?.message || failure || '未知错误');
-  renderHistory();
 }
 
-function renderHistory() {
+function renderHistory(failure = '') {
   const frag = document.createDocumentFragment();
   const emptyRow = (text) => {
     const tr = document.createElement('tr');
@@ -1467,29 +1013,22 @@ function renderHistory() {
     tr.append(td);
     return tr;
   };
-  els.historyNote.className = historyError
-    ? (historyRows.length ? 'text-muted' : 'text-danger')
-    : 'text-muted';
-  if (historyError && !historyRows.length) {
-    els.historyNote.className = 'text-danger';
-    els.historyNote.textContent = historyHint(historyError);
-    frag.append(emptyRow('历史对局读取失败'));
+  els.historyNote.className = failure ? 'text-danger' : 'text-muted';
+  if (failure && !historyRows.length) {
+    els.historyNote.textContent = failure;
+    frag.append(emptyRow('历史对局暂不可用'));
     els.historyBody.replaceChildren(frag);
     return;
   }
   if (!historyRows.length) {
-    els.historyNote.textContent = '打完一局后房主会自动保存回放（含全部讨论）';
+    els.historyNote.textContent = '每局结束时自动保存回放（含全部讨论）';
     frag.append(emptyRow('还没有对局记录'));
     els.historyBody.replaceChildren(frag);
     return;
   }
-  els.historyNote.textContent = `最近 ${historyRows.length} 局 · 回放包含全部发言和狼人夜间讨论`;
-  if (historyError) {
-    const note = document.createElement('span');
-    note.className = 'text-danger d-block';
-    note.textContent = `刷新失败（显示的是上次结果）：${historyHint(historyError)}`;
-    els.historyNote.append(note);
-  }
+  els.historyNote.textContent = failure
+    ? `刷新失败，显示上次的 ${historyRows.length} 局：${failure}`
+    : `最近 ${historyRows.length} 局 · 回放包含全部发言和狼人夜间讨论`;
   historyRows.forEach((row) => {
     const tr = document.createElement('tr');
     const when = document.createElement('td');
@@ -1526,7 +1065,7 @@ async function openReplay(id) {
   if (!guardClient()) return;
   const { data, error } = await client.from('replays').select('*').eq('id', id).maybeSingle();
   if (error) {
-    toast(friendlyError(error));
+    toast(replayReadHint(error));
     return;
   }
   if (!data) {
@@ -1535,30 +1074,9 @@ async function openReplay(id) {
   }
   replayData = data;
   replayFilter = 'all';
-  stopSpectate();
-  spectate = null;
+  endSpectate();
   showReplayView();
   renderReplay();
-}
-
-async function openLatestReplay(code) {
-  if (!guardClient()) return;
-  const { data, error } = await client
-    .from('replays')
-    .select('id')
-    .eq('room_code', code)
-    .order('finished_at', { ascending: false })
-    .limit(1);
-  if (error) {
-    toast(friendlyError(error));
-    return;
-  }
-  const row = (data || [])[0];
-  if (!row) {
-    toast('回放还没生成（需房主在线结算）或数据库未升级');
-    return;
-  }
-  await openReplay(row.id);
 }
 
 function replaySeatText(seat, name) {
@@ -1664,7 +1182,7 @@ function renderReplayLog() {
 
 function replayEventMatches(ev) {
   if (replayFilter === 'all') return true;
-  if (replayFilter === 'vote') return ev.t === 'vote';
+  if (replayFilter === 'vote') return ['vote','policeVote','policeRunoff'].includes(ev.t);
   return ev.t === replayFilter;
 }
 
@@ -1693,7 +1211,7 @@ function replayEventNode(ev) {
   const line = document.createElement('div');
   const dayChip = document.createElement('span');
   dayChip.className = 'sr-ev-day';
-  dayChip.textContent = ev.t === 'night' ? `第${ev.day}夜` : `第${ev.day}天`;
+  dayChip.textContent = ev.phase === 'night' || ev.t === 'night' || ev.t === 'wolfchat' ? `第${ev.day}夜` : `第${ev.day}天`;
   let cls = 'sr-ev';
   let text = '';
   if (ev.t === 'chat') {
@@ -1708,12 +1226,27 @@ function replayEventNode(ev) {
     cls += ' sr-ev-vote';
     const target = ev.target != null && ev.target > 0 ? `${pad(ev.target)} 号` : '弃权';
     text = `${ev.step === 'runoff' ? 'PK 投票' : '投票'}：${replaySeatText(ev.seat)} → ${target}`;
+  } else if (['policeSignup','policeSpeech','policeVote','policeRunoff','order','badge','lastwords'].includes(ev.t)) {
+    const detail = ev.t === 'order' ? (ev.payload.dir === 'ccw' ? '逆时针' : '顺时针')
+      : ev.t === 'policeSignup' ? (ev.payload.run ? '上警' : '不上警')
+      : ev.target > 0 ? `→ ${pad(ev.target)} 号` : ev.target === -1 ? '放弃' : '结束';
+    text = `${STEP_LABEL[ev.t]} · ${replaySeatText(ev.seat)}：${detail}`;
   } else if (ev.t === 'speech') {
     cls += ' sr-ev-muted';
     text = `${replaySeatText(ev.seat)} 结束发言`;
   } else if (ev.t === 'explode') {
     cls += ' sr-ev-warn';
     text = `${replaySeatText(ev.seat)} 自爆${ev.target ? `，带走 ${pad(ev.target)} 号` : ''}`;
+  } else if (ev.t === 'duel') {
+    text = `骑士 ${replaySeatText(ev.seat)} 决斗 ${replaySeatText(ev.target)}`;
+  } else if (ev.t === 'deathConfirm') {
+    text = `${replaySeatText(ev.seat)} 确认出局`;
+  } else if (ev.t === 'hunter') {
+    text = `猎人 ${replaySeatText(ev.seat)} ${ev.target ? `翻牌开枪带走 ${replaySeatText(ev.target)}` : ev.payload?.reveal === true ? '翻牌但不开枪' : ev.payload?.reveal === false ? '没有翻牌' : '没有开枪'}`;
+  } else if (ev.t === 'afk') {
+    text = `${replaySeatText(ev.seat)} 回来了，解除挂机`;
+  } else if (ev.t === 'leave') {
+    text = `${replaySeatText(ev.seat)} 离开了房间`;
   } else if (ev.t === 'kick') {
     cls += ' sr-ev-warn';
     text = `站长把 ${replaySeatText(ev.target)} 请出了房间`;
@@ -1743,8 +1276,7 @@ function renderReplayTimeline() {
 // ---------- 旁观进行中的对局 ----------
 async function openSpectate(code) {
   if (!guardClient()) return;
-  if (session && session.code === code) {
-    toast('这就是你当前的房间，直接返回对局吧');
+  if (session?.code === code) {
     backToRoom();
     return;
   }
@@ -1757,97 +1289,47 @@ async function openSpectate(code) {
     toast('请输入 6 位数字房间码');
     return;
   }
-  if (spectateBusy) return;
-  spectateBusy = true;
+  if (spectate?.code === code) return;
+  endSpectate();
+  const active = spectate = { code };
   try {
-    const { data, error } = await client
-      .from('rooms')
-      .select('code, options')
-      .eq('code', code)
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) throw new Error('房间不存在，检查一下房间码');
-    if (!data.options?.g) throw new Error('这局还没开始，想玩就直接加入房间吧');
-    spectate = { code, room: data, g: data.options.g, members: [], chatRows: [] };
-    showSpectateView();
     await spectateLoad();
-    startSpectatePoll();
+    if (spectate !== active) return;
+    showSpectateView();
+    startSpectatePoll(active);
   } catch (error) {
-    spectateBusy = false;
+    if (spectate !== active) return;
     toast(friendlyError(error));
-    stopSpectate();
-    spectate = null;
     showHome();
-    return;
   }
-  spectateBusy = false;
-}
-
-async function spectateLoad() {
-  if (!spectate || !client) return;
-  const code = spectate.code;
-  const { data: roomRow, error: roomError } = await client
-    .from('rooms')
-    .select('code, options')
-    .eq('code', code)
-    .maybeSingle();
-  if (!spectate) return;
-  if (roomError) throw roomError;
-  if (!roomRow || !roomRow.options?.g) {
-    toast('这局已经结束或被关闭');
-    exitSpectate();
-    return;
-  }
-  const { data: rows, error: rowsError } = await client
-    .from('players')
-    .select('id, name, seat, alive, is_bot')
-    .eq('room_code', code)
-    .order('joined_at', { ascending: true });
-  if (!spectate) return;
-  if (rowsError) throw rowsError;
-  const { data: chats, error: chatError } = await client
-    .from('game_actions')
-    .select('day, step, payload, created_at')
-    .eq('room_code', code)
-    .eq('step', 'chat')
-    .order('created_at', { ascending: true })
-    .limit(500);
-  if (!spectate) return;
-  if (chatError) throw chatError;
-  spectate.room = roomRow;
-  spectate.g = roomRow.options.g;
-  spectate.members = rows || [];
-  spectate.chatRows = chats || [];
-  renderSpectate();
 }
 
 function setSpectateNote(text) {
-  if (!els.spectateNote) return;
-  els.spectateNote.textContent = text || '';
+  els.spectateNote.textContent = text;
   els.spectateNote.hidden = !text;
 }
 
-function startSpectatePoll() {
+function startSpectatePoll(active) {
   stopSpectate();
-  spectateFailures = 0;
-  setSpectateNote('');
-  spectateTimer = setInterval(() => {
-    spectateLoad().then(() => {
-      if (!spectate) return;
-      if (spectateFailures) {
-        spectateFailures = 0;
-        setSpectateNote('');
-      }
-    }).catch((error) => {
-      if (!spectate) return;
-      spectateFailures += 1;
+  let failures = 0, pending = false;
+  spectateTimer = setInterval(async () => {
+    if (pending || active !== spectate) return;
+    pending = true;
+    try {
+      await spectateLoad();
+      if (active !== spectate) return;
+      failures = 0;
+      setSpectateNote('');
+    } catch (error) {
+      if (active !== spectate) return;
       const reason = friendlyError(error);
-      setSpectateNote(`旁观刷新失败（自动重试中）：${reason}`);
-      if (spectateFailures >= 5) {
+      if (++failures >= 5) {
         stopSpectate();
-        setSpectateNote(`旁观刷新失败，已暂停：${reason}。可以点「返回大厅」后重新进入`);
-      }
-    });
+        setSpectateNote(`旁观刷新已暂停：${reason}。请返回大厅后重新进入。`);
+      } else setSpectateNote(`旁观刷新失败，保留上次画面并自动重试：${reason}`);
+    } finally {
+      pending = false;
+    }
   }, 2000);
 }
 
@@ -1858,9 +1340,13 @@ function stopSpectate() {
   }
 }
 
-function exitSpectate() {
+function endSpectate() {
   stopSpectate();
   spectate = null;
+  setSpectateNote('');
+}
+
+function exitSpectate() {
   showHome();
 }
 
@@ -1874,7 +1360,7 @@ function showSpectateView() {
 }
 
 function spectatePromptText(state) {
-  if (state.phase === 'finished') return '对局已结束。点右上角「查看完整回放」查看含狼人夜聊的完整记录（需房主已保存）。';
+  if (state.phase === 'finished') return '对局已结束。点右上角「查看完整回放」查看含狼人夜聊的完整记录。';
   if (state.phase === 'night') return '夜晚行动中，具体行动保密。';
   if (state.phase === 'day') {
     const order = state.speechOrder || [];
@@ -1883,7 +1369,7 @@ function spectatePromptText(state) {
     return `${order.length > 1 ? `发言顺序：${order.map(pad).join(' → ')}。` : ''}当前 ${pad(speaker)} 号发言（第 ${state.speechIndex + 1} / ${order.length} 位）。`;
   }
   if (state.phase === 'vote' || state.phase === 'runoff') return '投票中，结果在本轮结束后公布。';
-  if (state.phase === 'hunter') return '正在结算…';
+  if (settling(state)) return '正在结算…';
   if (state.phase === 'dawn') return '天亮了，等待公布昨夜结果…';
   if (state.phase === 'sheriff') return '警长竞选中，结果稍后公布。';
   if (state.phase === 'order') return '警长正在决定今天的发言方向。';
@@ -1904,7 +1390,7 @@ function renderSpectate() {
   els.spectateCount.textContent = `${(state.aliveSeats || []).length} / ${total} 存活`;
   els.spectateMode.textContent = `${mode.name} · ${total} 人`;
   els.spectatePrompt.textContent = spectatePromptText(state);
-  els.spectateReplayBtn.hidden = state.phase !== 'finished';
+  els.spectateReplayBtn.hidden = !state.replayId;
   updateSpectateClock();
   renderSpectateSeats(state, mode);
   renderSpectateChat();
@@ -1918,7 +1404,8 @@ function renderSpectateSeats(state, mode) {
     if (member.seat) bySeat.set(member.seat, member);
   });
   const alive = new Set(state.aliveSeats || []);
-  const speaker = state.phase === 'day' ? (state.speechOrder?.[state.speechIndex] ?? null) : null;
+  const speaker = state.phase === 'day' ? state.speechOrder?.[state.speechIndex]
+    : state.step === 'policeSpeech' ? state.policeOrder?.[state.policeIndex] : state.lastWordsSeat;
   const frag = document.createDocumentFragment();
   for (let seat = 1; seat <= total; seat += 1) {
     const member = bySeat.get(seat);
@@ -2031,113 +1518,6 @@ function updateSpectateClock() {
     : '加时';
 }
 
-async function loadMyRole() {
-  if (!session) return;
-  const { data, error } = await client
-    .from('players')
-    .select('id, seat, role')
-    .eq('id', session.playerId)
-    .maybeSingle();
-  if (error || !data || !session) return;
-  const changed = myRow?.role !== data.role || myRow?.seat !== data.seat;
-  myRow = data;
-  if (changed) renderRoom();
-}
-
-async function loadHostRoles() {
-  if (!session) return;
-  const { data, error } = await client
-    .from('players')
-    .select('id, name, seat, role, alive, is_bot')
-    .eq('room_code', session.code)
-    .order('joined_at', { ascending: true });
-  if (error) return;
-  hostRoles = data || [];
-}
-
-async function loadAllRoles() {
-  if (!session) return;
-  const { data, error } = await client
-    .from('players')
-    .select('id, name, seat, role, alive, is_bot')
-    .eq('room_code', session.code)
-    .order('joined_at', { ascending: true });
-  if (error) return;
-  allRoles = (data || []).slice().sort((a, b) => (a.seat || 99) - (b.seat || 99));
-  renderGameOver();
-}
-
-async function loadChat() {
-  if (!session || !g) return;
-  if (g.phase === 'night') {
-    if (!isMyWolf()) {
-      wolfChatRows = [];
-      renderChat();
-      return;
-    }
-    const { data, error } = await client
-      .from('game_actions')
-      .select('player_id, payload, created_at, day')
-      .eq('room_code', session.code)
-      .eq('day', g.day)
-      .eq('step', 'wolfchat')
-      .order('created_at', { ascending: true })
-      .limit(120);
-    if (error || !g) return;
-    wolfChatRows = data || [];
-    renderChat();
-    return;
-  }
-  const { data, error } = await client
-    .from('game_actions')
-    .select('player_id, payload, created_at, day')
-    .eq('room_code', session.code)
-    .eq('step', 'chat')
-    .order('created_at', { ascending: true })
-    .limit(120);
-  if (error || !g) return;
-  chatRows = data || [];
-  renderChat();
-}
-
-async function loadWolfPicks() {
-  if (!session || !g) return;
-  const { data, error } = await client
-    .from('game_actions')
-    .select('player_id, target_seat, created_at')
-    .eq('room_code', session.code)
-    .eq('day', g.day)
-    .eq('step', 'wolves')
-    .order('created_at', { ascending: true });
-  if (error) return;
-  const idToSeat = new Map(members.map((m) => [m.id, m.seat]));
-  const latest = new Map();
-  (data || []).forEach((row) => {
-    const seat = idToSeat.get(row.player_id);
-    if (seat) latest.set(seat, row.target_seat);
-  });
-  wolfPicks = [...latest.entries()].map(([seat, target]) => ({ seat, target }));
-  renderRoom();
-}
-
-async function fetchActions(day, step) {
-  const { data, error } = await client
-    .from('game_actions')
-    .select('player_id, target_seat, payload, created_at')
-    .eq('room_code', session.code)
-    .eq('day', day)
-    .eq('step', step)
-    .order('created_at', { ascending: true });
-  if (error) return [];
-  const idToSeat = new Map(hostRoles.map((r) => [r.id, r.seat]));
-  const latest = new Map();
-  (data || []).forEach((row) => {
-    const seat = idToSeat.get(row.player_id);
-    if (seat != null) latest.set(seat, { seat, target: row.target_seat, payload: row.payload || {} });
-  });
-  return [...latest.values()];
-}
-
 function renderFeed() {
   const entries = [];
   localFeed.slice(-20).forEach((text) => entries.push({ kind: 'system', text }));
@@ -2166,6 +1546,7 @@ function loadPreSpeech() {
     const raw = JSON.parse(localStorage.getItem(key) || 'null');
     if (!raw || !Array.isArray(raw.msgs)) return;
     preSpeech = {
+      matchId: raw.matchId,
       day: Number(raw.day) || 0,
       msgs: raw.msgs.filter((text) => typeof text === 'string' && text.trim()).slice(0, 12),
     };
@@ -2203,7 +1584,7 @@ function canPreInput() {
 
 function queueSpeech(text) {
   if (!g) return;
-  if (preSpeech.day !== g.day) preSpeech = { day: g.day, msgs: [] };
+  if (preSpeech.day !== g.day || preSpeech.matchId !== g.matchId) preSpeech = { matchId:g.matchId, day:g.day, msgs:[] };
   if (preSpeech.msgs.length >= 12) {
     toast('先存了 12 条，等轮到你时再接着发');
     return;
@@ -2213,26 +1594,6 @@ function queueSpeech(text) {
   renderChat();
   updateChatForm();
   toast(`已排第 ${preSpeech.msgs.length} 条，轮到你时会自动发出`);
-}
-
-async function sendChatMessage(text, preinput) {
-  if (!session || !g) return false;
-  const name = profile?.username || session.name || '';
-  const { error } = await client
-    .from('game_actions')
-    .insert({
-      room_code: session.code,
-      day: g.day,
-      step: 'chat',
-      player_id: session.playerId,
-      target_seat: null,
-      payload: { name, text, preinput: Boolean(preinput) },
-    });
-  if (error) {
-    toast(friendlyError(error));
-    return false;
-  }
-  return true;
 }
 
 async function flushPreSpeech() {
@@ -2248,7 +1609,7 @@ async function flushPreSpeech() {
   renderChat();
   let failedIndex = -1;
   for (let i = 0; i < msgs.length; i += 1) {
-    const ok = await sendChatMessage(msgs[i], true);
+    const ok = await act('chat',null,{text:msgs[i]});
     if (!ok) {
       failedIndex = i;
       break;
@@ -2262,10 +1623,6 @@ async function flushPreSpeech() {
   preFlushing = false;
   renderChat();
   updateChatForm();
-  if (failedIndex < 0) {
-    setTimeout(loadChat, 300);
-    if (isHost()) setTimeout(hostTick, 250);
-  }
 }
 
 function renderChat() {
@@ -2342,6 +1699,10 @@ function phaseText() {
   return phaseTextOf(g);
 }
 
+function isAfk(seat) { return Boolean(g?.afk?.includes(seat)); }
+
+function settling(state) { return ['hunter', 'settling'].includes(state?.phase); }
+
 function phaseTextOf(state) {
   if (!state) return '等待玩家';
   if (state.phase === 'finished') return '对局结束';
@@ -2349,15 +1710,8 @@ function phaseTextOf(state) {
   if (state.phase === 'dawn') return `第 ${state.day} 天 · 天亮了`;
   if (state.phase === 'vote') return `第 ${state.day} 天 · 投票`;
   if (state.phase === 'runoff') return `第 ${state.day} 天 · PK 投票`;
-  if (state.phase === 'hunter') return '出局结算';
-  if (state.phase === 'sheriff') {
-    if (state.step === 'policeSpeech') return '第 1 天 · 候选人发言';
-    if (state.step === 'policeVote' || state.step === 'policeRunoff') return '第 1 天 · 警下投票';
-    return '第 1 天 · 警长竞选';
-  }
-  if (state.phase === 'order') return `第 ${state.day} 天 · 警长定发言顺序`;
-  if (state.phase === 'lastwords') return `第 ${state.day} 天 · 遗言`;
-  if (state.phase === 'badge') return '警徽移交';
+  if (settling(state)) return '出局结算';
+  if (['sheriff','order','lastwords','badge'].includes(state.phase)) return `第 ${state.day} 天 · ${STEP_LABEL[state.step]}`;
   return `第 ${state.day} 天 · 讨论`;
 }
 
@@ -2433,7 +1787,7 @@ function renderStatusPrompt(mode, inGame) {
     }
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.statusPrompt.textContent = '投票：点击座位选择目标，不能投自己，也可以弃权。';
-  } else if (g.phase === 'hunter') {
+  } else if (settling(g)) {
     els.statusPrompt.textContent = '正在结算…';
   } else if (g.phase === 'dawn') {
     els.statusPrompt.textContent = '天亮了，等待公布昨夜结果…';
@@ -2456,16 +1810,47 @@ setInterval(() => {
   updateSpectateClock();
 }, 500);
 
+function appointControls(member, mode) {
+  const fixed = room?.appointments || {};
+  const wrap = document.createElement('div');
+  wrap.className = 'sr-kick sr-appoint';
+  wrap.addEventListener('click', e => e.stopPropagation());
+  if (appointId !== member.id) {
+    wrap.append(makeBtn(fixed[member.id] ? `钦定 · ${ROLES[fixed[member.id]].name}` : '钦定', 'btn-outline-dark', () => {
+      appointId = member.id;
+      renderRoom();
+    }));
+    return wrap;
+  }
+  const select = document.createElement('select');
+  select.className = 'form-control form-control-sm sr-rolepick';
+  select.setAttribute('aria-label', `钦定 ${member.name} 的身份`);
+  select.add(new Option('不钦定（随机）', ''));
+  for (const role of new Set(mode.roles)) {
+    const used = Object.entries(fixed).filter(([id, r]) => id !== member.id && r === role).length;
+    const left = mode.roles.filter(r => r === role).length - used;
+    if (left > 0) select.add(new Option(`${ROLES[role].name}（剩 ${left}）`, role));
+  }
+  select.value = fixed[member.id] || '';
+  select.addEventListener('change', async () => {
+    appointId = null;
+    try { await roomCommand('appoint', { id: member.id, role: select.value || null }); }
+    catch (error) { toast(friendlyError(error)); renderRoom(); }
+  });
+  wrap.append(select, makeBtn('取消', 'btn-outline-secondary', () => { appointId = null; renderRoom(); }));
+  return wrap;
+}
+
 function renderSeats(mode, inGame) {
   const total = mode.roles.length;
-  const hostId = members[0]?.id;
+  const hostId = room?.hostId;
   const bySeat = new Map();
   members.forEach((member, index) => {
     const seat = inGame && member.seat ? member.seat : index + 1;
     bySeat.set(seat, member);
   });
   const alive = inGame ? aliveSet() : null;
-  const policeSpeaker = inGame && g.phase === 'sheriff' && g.step === 'policeSpeech'
+  const policeSpeaker = g?.phase === 'lastwords' ? g.lastWordsSeat : inGame && g.phase === 'sheriff' && g.step === 'policeSpeech'
     ? (g.policeOrder || [])[g.policeIndex]
     : null;
 
@@ -2541,16 +1926,6 @@ function renderSeats(mode, inGame) {
         marks.append(bot);
       }
 
-      if (!inGame && isOwnerAccount()) {
-        const fixed = lobbyRoles.get(member.id);
-        if (fixed) {
-          const app = document.createElement('span');
-          app.className = 'badge badge-dark';
-          app.textContent = `钦定 · ${ROLES[fixed]?.name || fixed}`;
-          marks.append(app);
-        }
-      }
-
       avatar.textContent = (member.name || '?').trim().charAt(0).toUpperCase();
       name.textContent = member.name;
 
@@ -2603,11 +1978,7 @@ function renderSeats(mode, inGame) {
         li.append(tag);
       }
     }
-    if (!inGame && isOwnerAccount() && session && member) {
-      const controls = appointControls(member, mode);
-      controls.addEventListener('click', (event) => event.stopPropagation());
-      li.append(controls);
-    }
+    if (!inGame && session && member && isOwnerAccount()) li.append(appointControls(member, mode));
     if (member && canKickMember(member)) {
       const wrap = document.createElement('div');
       wrap.className = 'sr-kick';
@@ -2674,32 +2045,6 @@ function submittedHelp(step) {
   return submitted.has(`${g.day}:${step}`);
 }
 
-function act(step, target, payload) {
-  if (!session || !g) return;
-  const key = `${g.day}:${step}`;
-  const storedStep = payload && payload.explode ? 'explode' : step;
-  client
-    .from('game_actions')
-    .insert({
-      room_code: session.code,
-      day: g.day,
-      step: storedStep,
-      player_id: session.playerId,
-      target_seat: target ?? null,
-      payload: payload || {},
-    })
-    .then(({ error }) => {
-      if (error) {
-        toast(friendlyError(error));
-        return;
-      }
-      submitted.add(key);
-      toast('已提交，等待结算');
-      if (isHost()) setTimeout(hostTick, 200);
-      renderRoom();
-    });
-}
-
 function renderActionPanel(mode, inGame) {
   els.actionArea.replaceChildren();
   if (!inGame) {
@@ -2711,15 +2056,13 @@ function renderActionPanel(mode, inGame) {
         startGame,
         missing > 0
       );
-      els.actionArea.append(btn, note('满员后随机入座、随机发牌'));
-      if (isOwnerAccount()) {
-        els.actionArea.append(note('你是站长：可以点座位下方的「钦定」指定某人的身份（只有你看得到），其余人照常随机；座位仍然随机。'));
-      }
+      els.actionArea.append(btn, note('满员后随机入座、发牌'));
     } else {
       els.actionArea.append(note(missing > 0
         ? `等待房主开始（还差 ${missing} 人）`
         : '人齐了，等待房主点「开始游戏」'));
     }
+    if (isOwnerAccount()) els.actionArea.append(note('发牌前可在座位下方钦定身份。只有站长能看到预设；其余身份和所有座位仍然随机。'));
     if (isOwnerAccount() && missing > 0) {
       els.actionArea.append(makeBtn('添加人机（占位）', 'btn-outline-primary', () => {
         addBot().catch((error) => toast(friendlyError(error)));
@@ -2738,32 +2081,25 @@ function renderActionPanel(mode, inGame) {
   const role = myRow?.role;
   const alive = isAliveSeat(seat);
 
+  if (isAfk(seat)) {
+    els.actionArea.append(note('你已挂机：本局局时已用完，不再加时。'));
+    els.actionArea.append(makeBtn('我回来了', 'btn-warning', () => act('afk', null, { back: true })));
+  }
+  if (g.phase === 'settling' && g.step === 'deathConfirm') {
+    els.actionArea.append(submittedHelp('deathConfirm') ? note('已确认，等待结算…')
+      : makeBtn('确认出局（不翻牌）', 'btn-outline-secondary', () => act('deathConfirm', null)));
+    return;
+  }
   if (g.phase === 'hunter' && g.hunterPending === seat) {
     renderHunterPanel(seat);
     return;
   }
-  if (g.phase === 'sheriff') {
-    renderSheriffPanel(seat);
-    return;
-  }
-  if (g.phase === 'order') {
-    renderOrderPanel(seat);
-    return;
-  }
-  if (g.phase === 'lastwords') {
-    renderLastWordsPanel(seat);
-    return;
-  }
-  if (g.phase === 'badge') {
-    renderBadgePanel(seat);
-    return;
-  }
-  if (isAfk(seat)) {
-    els.actionArea.append(note('你已挂机：本局 60 秒局时已经用完，系统不会再多等你。'));
-    els.actionArea.append(makeBtn('我回来了', 'btn-warning', () => act('afk', null, { back: true })));
-  }
+  if (g.phase === 'sheriff') return renderSheriffPanel(seat);
+  if (g.phase === 'order') return renderOrderPanel(seat);
+  if (g.phase === 'lastwords') return renderLastWordsPanel(seat);
+  if (g.phase === 'badge') return renderBadgePanel(seat);
   if (!alive) {
-    els.actionArea.append(note('你已出局，可以旁观；死者不能在白天发言或投票。'));
+    els.actionArea.append(note('你已出局，可以旁观；未轮到遗言时不能发言。'));
     return;
   }
 
@@ -2773,7 +2109,7 @@ function renderActionPanel(mode, inGame) {
     renderDayPanel(seat, role);
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     renderVotePanel(seat, role);
-  } else if (g.phase === 'hunter') {
+  } else if (settling(g)) {
     els.actionArea.append(note('等待结算…'));
   } else if (g.phase === 'dawn') {
     els.actionArea.append(note('天亮了，等待公布昨夜结果…'));
@@ -2783,7 +2119,7 @@ function renderActionPanel(mode, inGame) {
 function renderNightPanel(seat, role) {
   const step = g.step;
   if (submittedHelp(step)) {
-    els.actionArea.append(note('已提交，等待结算…'));
+    els.actionArea.append(note(step === 'wolves' ? '已选定袭击目标，仍可在狼人频道发言。' : '已提交，等待结算…'));
     return;
   }
 
@@ -2846,13 +2182,13 @@ function renderNightPanel(seat, role) {
     els.actionArea.append(note(`女巫行动（${Math.round(DUR.witch / 1000)} 秒）：解药${g.potions.save ? '可用' : '已用'}，毒药${g.potions.poison ? '可用' : '已用'}，一晚最多用一瓶。`));
     if (g.kill != null) {
       els.actionArea.append(note(g.kill === seat
-        ? `今晚 ${pad(g.kill)} 号被狼人袭击（就是你）。你仍然可以自救，或者放弃解药直接开毒。`
+        ? `今晚 ${pad(g.kill)} 号被狼人袭击（就是你）。${g.potions.save ? '你可以用解药自救。' : '解药已用完，不能自救。'}`
         : `今晚 ${pad(g.kill)} 号被狼人袭击。`));
       if (g.potions.save) {
         els.actionArea.append(makeBtn(`用解药救 ${pad(g.kill)} 号`, 'btn-success', () => act('witch', null, { save: true })));
       }
     } else {
-      els.actionArea.append(note('今晚没有人被袭击，可以直接用毒药或跳过。'));
+      els.actionArea.append(note('目前没有可以用解药救的刀口。'));
     }
     if (g.potions.poison) {
       if (pick && pick.kind === 'poison') {
@@ -2968,11 +2304,16 @@ function renderDayPanel(seat, role) {
 }
 
 function renderVotePanel(seat, role) {
-  if (submittedHelp(g.step)) {
-    els.actionArea.append(note('已投票，等待其他玩家…'));
+  if (g.voteBanned.includes(seat)) {
+    els.actionArea.append(note('你已失去投票权。'));
     return;
   }
   if (renderExplodePick(seat, role)) return;
+  if (submittedHelp(g.step)) {
+    els.actionArea.append(note('已投票，等待其他玩家…'));
+    appendExplodeButtons(seat, role);
+    return;
+  }
   let allowed = g.aliveSeats.filter((s) => s !== seat);
   if (g.phase === 'runoff' && g.runoffSeats) {
     allowed = allowed.filter((s) => g.runoffSeats.includes(s));
@@ -3027,8 +2368,8 @@ function renderSheriffPanel(seat) {
     els.actionArea.append(note('已投票，等待其他警下玩家…'));
     return;
   }
-  const cands = step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
-  if (cands.includes(seat)) {
+  const cands = (step === 'policeRunoff' ? g.runoffSeats : g.sheriffCandidates).filter(isAliveSeat);
+  if (g.sheriffCandidates.includes(seat)) {
     els.actionArea.append(note('你是警长候选人，不能参与警下投票。'));
     return;
   }
@@ -3065,7 +2406,7 @@ function renderLastWordsPanel(seat) {
     return;
   }
   if (submittedHelp('lastwords')) {
-    els.actionArea.append(note('遗言已结束，等待结算…'));
+    els.actionArea.append(note('遗言已结束。'));
     return;
   }
   els.actionArea.append(note('你可以发表遗言：在右侧输入，可连发多条；说完点「说完了」。'));
@@ -3095,7 +2436,7 @@ function renderHunterPanel(seat) {
     return;
   }
   if (pick && pick.kind === 'hunter') {
-    els.actionArea.append(note('已翻牌：点击要带走的玩家再确认；也可以翻牌但不开枪。'));
+    els.actionArea.append(note('请选择目标并确认翻牌，或选择「翻牌但不开枪」。确认前身份仍保密。'));
     els.actionArea.append(pickButtons((sel) => act('hunter', sel[0], { reveal: true })));
     els.actionArea.append(makeBtn('翻牌但不开枪', 'btn-outline-secondary', () => {
       pick = null;
@@ -3128,7 +2469,7 @@ function renderMyBar() {
 
   els.myBar.hidden = false;
   els.myBar.className = `sr-me mb-3 ${camp.bar}`.trim();
-  els.mySeat.textContent = seat ? `座位 ${pad(seat)}` : '座位 —';
+  els.mySeat.textContent = seat ? `座位 ${pad(seat)}${g.myBank != null && g.phase !== 'finished' ? ` · 剩余局时 ${Math.ceil(g.myBank / 1000)} 秒` : ''}` : '座位 —';
   els.revealBtn.textContent = roleShown ? '收起身份牌' : '查看我的身份牌';
 
   els.roleCard.className = `card mb-3 sr-rolecard ${role.camp === 'killer' ? 'sr-rolecard-killer' : role.camp === 'police' ? 'sr-rolecard-police' : 'sr-rolecard-neutral'}`.trim();
@@ -3154,7 +2495,7 @@ function renderMyBar() {
   if (g.lovers && seat != null) {
     if (g.lovers.includes(seat)) {
       const partner = g.lovers[0] === seat ? g.lovers[1] : g.lovers[0];
-      const cross = g.lovers.some((s) => g.teams.wolves.includes(s)) && g.lovers.some((s) => !g.teams.wolves.includes(s));
+      const cross = g.mixedLovers;
       extras.push(`你的情侣是 ${pad(partner)} 号${cross ? '（人狼情侣，第三方阵营）' : ''}`);
     }
     if (roleKey === 'cupid') {
@@ -3216,21 +2557,19 @@ function renderGameOver() {
   const show = Boolean(g && g.phase === 'finished');
   els.gameOverCard.hidden = !show;
   els.replayBtn.hidden = !(show && isHost());
-  els.watchReplayBtn.hidden = !show;
-  els.saveReplayBtn.hidden = !(show && isHost() && g.replayError && !g.replaySaved);
+  els.watchReplayBtn.hidden = !show || !g.replayId;
   if (!show) return;
 
   const winner = g.winner;
   const label = winner === 'wolf' ? '狼人阵营获胜' : winner === 'lovers' ? '第三方阵营获胜' : '好人阵营获胜';
   els.winnerText.className = `sr-winner ${winner === 'wolf' ? 'sr-winner-wolf' : winner === 'lovers' ? 'sr-winner-lovers' : ''}`.trim();
   els.winnerText.textContent = `${label} · ${g.winReason || ''}`;
-  els.resultNote.textContent = (g.rating
+  els.resultNote.textContent = g.rating
     ? `共 ${g.day} 天 · 评分 K=${g.rating.k} · 按昵称永久保存，零和结算`
-    : `共 ${g.day} 天 · 评分未结算（房主需运行 supabase/migration-v4.sql）`)
-    + (g.replayError ? ` · 回放未保存：${g.replayError}` : '');
+    : `共 ${g.day} 天 · 无评分记录`;
 
   const detail = new Map((g.rating?.players || []).map((item) => [item.seat, item]));
-  const rows = (allRoles.length ? allRoles : members).slice();
+  const rows = members.slice();
   rows.sort((a, b) => (a.seat || 99) - (b.seat || 99));
   const frag = document.createDocumentFragment();
   rows.forEach((row) => {
@@ -3260,7 +2599,7 @@ function renderGameOver() {
 
     const lastDeath = (g.deaths || []).filter((death) => death.seat === row.seat).slice(-1)[0];
     const death = item?.death || lastDeath || null;
-    const win = item ? item.win : (row.is_bot ? didPlayerWin(row) : null);
+    const win = item ? item.win : (row.won ?? null);
     const resultTd = document.createElement('td');
     if (win == null) {
       resultTd.textContent = '—';
@@ -3304,7 +2643,7 @@ function renderGameOver() {
 function updateChatForm() {
   const alive = isAliveSeat(myRow?.seat);
   const speaker = currentSpeaker();
-  if (g && preSpeech.msgs.length && preSpeech.day !== g.day) clearPreSpeech();
+  if (g && preSpeech.msgs.length && (preSpeech.day !== g.day || preSpeech.matchId !== g.matchId)) clearPreSpeech();
   const wolfNight = Boolean(g) && g.phase === 'night' && isMyWolf() && alive;
   const speechDone = Boolean(g) && submitted.has(`${g.day}:speech`);
   const myTurn = Boolean(g) && g.phase === 'day' && alive && speaker === myRow?.seat && !speechDone;
@@ -3376,1585 +2715,39 @@ function updateChatForm() {
     els.chatNote.textContent = '等待警长处理警徽';
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.chatNote.textContent = '投票中不能发言';
-  } else if (g.phase === 'hunter') {
+  } else if (settling(g)) {
     els.chatNote.textContent = '等待结算';
   } else {
     els.chatNote.textContent = '天亮了，等待公布结果';
   }
 }
 
-async function startGame() {
-  if (busy || !room) return;
-  const mode = currentMode();
-  const total = mode.roles.length;
-  if (!isHost()) return toast('只有房主可以开始游戏');
-  if (members.length !== total) return toast(`还差 ${total - members.length} 人`);
-  if (g) return;
-
-  busy = true;
-  const btn = els.actionArea.querySelector('button');
-  if (btn) { btn.disabled = true; btn.textContent = '发牌中…'; }
-
-  try {
-    await client.from('game_actions').delete().eq('room_code', session.code);
-
-    const roster = members.slice(0, total);
-    const { data: roleRows, error: roleError } = await client
-      .from('players')
-      .select('id, role')
-      .in('id', roster.map((row) => row.id));
-    if (roleError) throw roleError;
-    const pool = [...mode.roles];
-    const fixed = new Map();
-    (roleRows || []).forEach((row) => {
-      if (!row.role) return;
-      const at = pool.indexOf(row.role);
-      if (at >= 0) {
-        pool.splice(at, 1);
-        fixed.set(row.id, row.role);
-      }
-    });
-    const free = Rules.shuffle(pool);
-    const seats = Rules.shuffle(Array.from({ length: total }, (_, i) => i + 1));
-    for (let i = 0; i < roster.length; i += 1) {
-      const role = fixed.get(roster[i].id) || free.shift();
-      const { error } = await client
-        .from('players')
-        .update({ role, seat: seats[i], alive: true })
-        .eq('id', roster[i].id);
-      if (error) throw error;
-    }
-    lobbyRoles = new Map();
-    appointId = null;
-    await loadHostRoles();
-    if (hostRoles.length !== roster.length || hostRoles.some((row) => !row.seat || !row.role)) {
-      throw new Error('座位数据没写全，请重试一次');
-    }
-    myRow = hostRoles.find((row) => row.id === session.playerId) || myRow;
-
-    const rolesBySeat = {};
-    hostRoles.forEach((row) => { rolesBySeat[row.seat] = row.role; });
-    const teams = Rules.groupsFromRoles(rolesBySeat);
-    const thiefSeat = hostRoles.find((r) => r.role === 'thief')?.seat ?? null;
-    const cupidSeat = hostRoles.find((r) => r.role === 'cupid')?.seat ?? null;
-
-    g = {
-      mode: mode.id,
-      phase: 'night',
-      step: null,
-      day: 1,
-      deadline: null,
-      aliveSeats: hostRoles.map((r) => r.seat).sort((a, b) => a - b),
-      teams,
-      lovers: null,
-      cupidSeat,
-      thiefSeat,
-      thiefCards: thiefSeat ? drawThiefCards() : null,
-      checks: [],
-      potions: { save: true, poison: true },
-      lastGuard: null,
-      lastCharm: null,
-      charmTarget: null,
-      kill: null,
-      guarded: null,
-      saved: false,
-      poison: null,
-      knightUsed: false,
-      voteBanned: [],
-      idiotRevealed: [],
-      hunterPending: null,
-      hunterFrom: null,
-      hunterUsed: false,
-      nightQueue: [],
-      nightIndex: 0,
-      votes: null,
-      runoffSeats: null,
-      voteHistory: [],
-      speechOrder: null,
-      speechIndex: 0,
-      speechDir: 'cw',
-      sheriff: null,
-      sheriffCandidates: null,
-      sheriffDone: false,
-      policeOrder: null,
-      policeIndex: 0,
-      badgePending: null,
-      deathResume: null,
-      lastWordsQueue: [],
-      lastWordsSeat: null,
-      deaths: [],
-      kicked: [],
-      bank: {},
-      afk: [],
-      bankMark: {},
-      log: [{ day: 1, kind: 'system', text: `板子：${mode.name}，共 ${total} 人` }],
-      winner: null,
-      winReason: '',
-      ratingApplied: false,
-    };
-    g.log.push({ day: 1, kind: 'night', text: '第 1 夜 · 天黑请闭眼' });
-    await startNightInternal(true);
-  } catch (error) {
-    toast(`发牌失败：${friendlyError(error)}`);
-    g = null;
-  } finally {
-    busy = false;
-    renderRoom();
-    renderGameOver();
-  }
-}
-
-function drawThiefCards() {
-  const pool = ['villager', 'villager', 'werewolf', 'hunter', 'guard', 'seer'];
-  return Rules.shuffle(pool).slice(0, 2);
-}
-
-function buildNightQueue() {
-  const queue = [];
-  if (g.day === 1 && g.thiefSeat && isAliveSeat(g.thiefSeat)) queue.push('thief');
-  if (g.day === 1 && g.cupidSeat && isAliveSeat(g.cupidSeat)) queue.push('cupid');
-  const guard = roleSeat('guard');
-  if (guard && isAliveSeat(guard)) queue.push('guard');
-  if (g.teams.wolves.some((s) => isAliveSeat(s))) queue.push('wolves');
-  const beast = roleSeat('wolfbeauty');
-  if (beast && isAliveSeat(beast)) queue.push('wolfbeauty');
-  const witch = roleSeat('witch');
-  if (witch && isAliveSeat(witch) && (g.potions.save || g.potions.poison)) queue.push('witch');
-  const seer = roleSeat('seer');
-  if (seer && isAliveSeat(seer)) queue.push('seer');
-  return queue;
-}
-
-async function startNightInternal(first) {
-  if (!first) g.day += 1;
-  g.phase = 'night';
-  g.kill = null;
-  g.guarded = null;
-  g.saved = false;
-  g.poison = null;
-  g.charmTarget = null;
-  g.votes = null;
-  g.runoffSeats = null;
-  g.step = null;
-  g.nightQueue = buildNightQueue();
-  g.nightIndex = 0;
-  if (!first) g.log.push({ day: g.day, kind: 'night', text: `第 ${g.day} 夜 · 天黑请闭眼` });
-  if (g.nightQueue.length) await enterStep(g.nightQueue[0]);
-  else await finishNight();
-}
-
-async function enterStep(step) {
-  g.step = step;
-  g.stepStart = Date.now();
-  g.deadline = Date.now() + (DUR[step] || 30000);
-  await saveGame();
-}
-
-function expectedSeats(step) {
-  if (step === 'thief') return g.thiefSeat && isAliveSeat(g.thiefSeat) ? [g.thiefSeat] : [];
-  if (step === 'cupid') return g.cupidSeat && isAliveSeat(g.cupidSeat) ? [g.cupidSeat] : [];
-  if (step === 'guard') {
-    const seat = roleSeat('guard');
-    return seat && isAliveSeat(seat) ? [seat] : [];
-  }
-  if (step === 'wolves') return g.teams.wolves.filter((s) => isAliveSeat(s));
-  if (step === 'wolfbeauty') {
-    const seat = roleSeat('wolfbeauty');
-    return seat && isAliveSeat(seat) ? [seat] : [];
-  }
-  if (step === 'witch') {
-    const seat = roleSeat('witch');
-    return seat && isAliveSeat(seat) ? [seat] : [];
-  }
-  if (step === 'seer') {
-    const seat = roleSeat('seer');
-    return seat && isAliveSeat(seat) ? [seat] : [];
-  }
-  if (step === 'hunter') return g.hunterPending != null ? [g.hunterPending] : [];
-  if (step === 'policeSignup') return g.aliveSeats.slice();
-  if (step === 'policeSpeech') {
-    const seat = (g.policeOrder || [])[g.policeIndex];
-    return seat != null ? [seat] : [];
-  }
-  if (step === 'policeVote' || step === 'policeRunoff') {
-    const cands = step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
-    return g.aliveSeats.filter((s) => !cands.includes(s));
-  }
-  if (step === 'order') return g.sheriff != null ? [g.sheriff] : [];
-  if (step === 'lastwords') return g.lastWordsSeat != null ? [g.lastWordsSeat] : [];
-  if (step === 'badge') return g.badgePending != null ? [g.badgePending] : [];
-  if (step === 'vote' || step === 'runoff') {
-    return g.aliveSeats.filter((s) => !g.voteBanned.includes(s));
-  }
-  return [];
-}
-
-function allActed(step, actions) {
-  const expected = expectedSeats(step);
-  if (!expected.length) return true;
-  const acted = new Set(actions.filter((a) => a.payload && !a.payload.ignore).map((a) => a.seat));
-  if (expected.every((seat) => acted.has(seat))) return true;
-  if (g.phase !== 'night') return false;
-  // 夜晚给离线/掉线玩家留一点反应时间，避免女巫刚被判定离线就被跳过
-  const started = g.stepStart || (g.deadline ? g.deadline - (DUR[step] || 30000) : Date.now());
-  if (Date.now() - started < 12000) return false;
-  return expected.every((seat) => acted.has(seat) || !isSeatOnline(seat));
-}
-
-// ---------- 局时：每个回合 60 秒用完后，按剩余局时继续等，迟到时间从局时里扣 ----------
-
-function ensureBank() {
-  if (!g) return;
-  if (!g.bank) g.bank = {};
-  if (!g.afk) g.afk = [];
-  if (!g.bankMark) g.bankMark = {};
-  hostRoles.forEach((row) => {
-    if (typeof g.bank[row.seat] !== 'number') g.bank[row.seat] = 60000;
-  });
-}
-
-function isAfk(seat) {
-  return Boolean(g?.afk && g.afk.includes(seat));
-}
-
-function bankOf(seat) {
-  return (g?.bank && typeof g.bank[seat] === 'number') ? g.bank[seat] : 0;
-}
-
-function markAfk(seat) {
-  if (!g || isAfk(seat)) return;
-  g.afk.push(seat);
-  const row = rowBySeat(seat);
-  g.log.push({
-    day: g.day,
-    kind: 'warning',
-    text: `${pad(seat)} 号${row?.name ? `（${row.name}）` : ''}60 秒局时用完，进入挂机状态`,
-  });
-}
-
-// 截止后才提交的玩家：把迟到的秒数从局时里扣掉（每个回合只扣一次）
-function bankCharge(key, seats, actions) {
-  if (!g?.bank || !g.deadline) return false;
-  const now = Date.now();
-  if (now <= g.deadline) return false;
-  const acted = new Set(actions.map((a) => a.seat));
-  let changed = false;
-  seats.forEach((seat) => {
-    if (!acted.has(seat) || isBotSeat(seat)) return;
-    const mark = `${key}:${seat}`;
-    if (g.bankMark[mark]) return;
-    g.bankMark[mark] = 1;
-    const used = Math.min(bankOf(seat), now - g.deadline);
-    g.bank[seat] = Math.max(0, bankOf(seat) - used);
-    changed = true;
-    if (g.bank[seat] <= 0) markAfk(seat);
-  });
-  return changed;
-}
-
-// 截止后还在等的人：局时耗尽的立刻挂机
-function bankTick(key, seats, actions) {
-  if (!g?.bank || !g.deadline) return false;
-  const now = Date.now();
-  if (now <= g.deadline) return false;
-  const acted = new Set(actions.map((a) => a.seat));
-  let changed = false;
-  seats.forEach((seat) => {
-    if (acted.has(seat) || isBotSeat(seat) || !isSeatOnline(seat) || isAfk(seat)) return;
-    const bank = bankOf(seat);
-    if (bank > 0 && now - g.deadline >= bank) {
-      g.bank[seat] = 0;
-      markAfk(seat);
-      changed = true;
-    }
-  });
-  return changed;
-}
-
-// 还要额外等多久（取最长的剩余局时）
-function bankExtra(seats, actions) {
-  if (!g?.bank || !g.deadline) return 0;
-  const acted = new Set(actions.map((a) => a.seat));
-  let extra = 0;
-  seats.forEach((seat) => {
-    if (acted.has(seat) || isBotSeat(seat) || !isSeatOnline(seat) || isAfk(seat)) return;
-    extra = Math.max(extra, bankOf(seat));
-  });
-  return extra;
-}
-
-async function processAfkBack() {
-  if (!g || !g.afk || !g.afk.length) return;
-  const rows = await fetchActions(g.day, 'afk');
-  const backs = rows.filter((row) => row.payload?.back && g.afk.includes(row.seat));
-  if (!backs.length) return;
-  backs.forEach((row) => {
-    g.afk = g.afk.filter((s) => s !== row.seat);
-    g.log.push({ day: g.day, kind: 'system', text: `${pad(row.seat)} 号回来了，解除挂机` });
-  });
-  await saveGame();
-  renderRoom();
-}
-
-async function fetchHostActions(day, step) {
-  const rows = await fetchActions(day, step);
-  if (step !== 'explode' && (g.phase === 'day' || g.phase === 'vote' || g.phase === 'runoff')) {
-    const bombs = await fetchActions(day, 'explode');
-    bombs.forEach((bomb) => rows.push(bomb));
-  }
-  return rows;
-}
-
-async function hostTick() {
-  if (!session || !isHost() || !g || !room || g.phase === 'finished' || hostBusy) return;
-  hostBusy = true;
-  try {
-    if (!hostRoles.length) await loadHostRoles();
-    ensureBank();
-    await processAfkBack();
-    if (await processKickRequest()) return;
-    let actions = await fetchHostActions(g.day, g.step || 'day');
-    const now = Date.now();
-    if (g.phase === 'night') {
-      if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
-      const seats = expectedSeats(g.step);
-      const key = `n${g.day}:${g.step}`;
-      const changed = bankCharge(key, seats, actions) || bankTick(key, seats, actions);
-      const extra = bankExtra(seats, actions);
-      if (allActed(g.step, actions) || now >= g.deadline + extra) {
-        // 超时结算前再取一次，避免女巫/预言家在最后一刻提交的动作被漏掉
-        const finalActions = now >= g.deadline ? await fetchActions(g.day, g.step) : actions;
-        await resolveNightStep(finalActions);
-      } else if (changed) {
-        await saveGame();
-      }
-    } else if (g.phase === 'dawn') {
-      if (now >= g.deadline) {
-        if (g.day === 1 && !g.sheriffDone) await startSheriffSignup();
-        else if (g.sheriff != null && isAliveSeat(g.sheriff) && g.aliveSeats.length > 1) await startOrderPhase();
-        else await startDay();
-      }
-    } else if (g.phase === 'sheriff') {
-      if (g.step === 'policeSignup') {
-        if (await fillBotActions('policeSignup', actions)) actions = await fetchActions(g.day, 'policeSignup');
-        if (allActed('policeSignup', actions) || now >= g.deadline) await resolveSheriffSignup(actions);
-      } else if (g.step === 'policeSpeech') {
-        const cand = (g.policeOrder || [])[g.policeIndex];
-        if (cand == null) {
-          await startPoliceVote();
-          return;
-        }
-        if (!isSeatOnline(cand)) {
-          g.log.push({ day: g.day, kind: 'system', text: `${pad(cand)} 号离线，跳过竞选发言` });
-          await advancePoliceSpeech();
-          return;
-        }
-        const rows = await fetchActions(g.day, 'policeSpeech');
-        const ended = rows.some((r) => r.seat === cand && Number(r.payload?.turn) === g.policeIndex);
-        if (ended || now >= g.deadline) await advancePoliceSpeech();
-      } else {
-        if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
-        if (allActed(g.step, actions) || now >= g.deadline) await resolvePoliceVote(actions);
-      }
-    } else if (g.phase === 'order') {
-      const rows = await fetchActions(g.day, 'order');
-      const picked = rows.find((r) => r.seat === g.sheriff && (r.payload?.dir === 'cw' || r.payload?.dir === 'ccw'));
-      if (picked || now >= g.deadline) {
-        g.speechDir = picked?.payload.dir === 'ccw' ? 'ccw' : 'cw';
-        g.log.push({ day: g.day, kind: 'system', text: `警长选择${g.speechDir === 'ccw' ? '逆' : '顺'}时针发言` });
-        await startDay();
-      }
-    } else if (g.phase === 'lastwords') {
-      const seat = g.lastWordsSeat;
-      if (seat == null) {
-        await endLastWords();
-      } else if (!isSeatOnline(seat)) {
-        g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号离线，没有遗言` });
-        await endLastWords();
-      } else {
-        const rows = await fetchActions(g.day, 'lastwords');
-        const ended = rows.some((r) => r.seat === seat && r.payload?.end);
-        if (ended || now >= g.deadline) await endLastWords();
-      }
-    } else if (g.phase === 'badge') {
-      const rows = await fetchActions(g.day, 'badge');
-      const seat = g.badgePending;
-      const acted = rows.some((r) => r.seat === seat);
-      if (acted || now >= g.deadline) {
-        await resolveBadge(rows);
-      } else if (seat != null && !isSeatOnline(seat)) {
-        g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号离线，警徽作废` });
-        await resolveBadge([]);
-      }
-    } else if (g.phase === 'day') {
-      const handled = await handleDaySpecial(actions);
-      if (handled) return;
-      const speaker = currentSpeaker();
-      if (speaker == null) {
-        await startVote();
-        return;
-      }
-      if (!isAliveSeat(speaker)) {
-        await advanceSpeech();
-        return;
-      }
-      if (isBotSeat(speaker)) {
-        g.log.push({ day: g.day, kind: 'system', text: `${pad(speaker)} 号（人机）不发言，跳过` });
-        await advanceSpeech();
-        return;
-      }
-      if (!isSeatOnline(speaker)) {
-        g.log.push({ day: g.day, kind: 'system', text: `${pad(speaker)} 号离线，跳过发言` });
-        await advanceSpeech();
-        return;
-      }
-      const speechActions = await fetchActions(g.day, 'speech');
-      const ended = speechActions.some(
-        (row) => row.seat === speaker && Number(row.payload?.turn) === g.speechIndex
-      );
-      const seats = [speaker];
-      const key = `s${g.day}:${g.speechIndex}`;
-      const changed = bankCharge(key, seats, speechActions) || bankTick(key, seats, speechActions);
-      const extra = bankExtra(seats, speechActions);
-      if (ended || now >= g.deadline + extra) await advanceSpeech();
-      else if (changed) await saveGame();
-    } else if (g.phase === 'vote' || g.phase === 'runoff') {
-      if (await fillBotActions(g.step, actions)) actions = await fetchHostActions(g.day, g.step);
-      const boom = findExplodeAction(actions);
-      if (boom) {
-        await resolveExplode(boom);
-        return;
-      }
-      const seats = expectedSeats(g.step);
-      const key = `v${g.day}:${g.step}`;
-      const changed = bankCharge(key, seats, actions) || bankTick(key, seats, actions);
-      const extra = bankExtra(seats, actions);
-      if (allActed(g.step, actions) || now >= g.deadline + extra) await resolveVote(actions);
-      else if (changed) await saveGame();
-    } else if (g.phase === 'hunter') {
-      if (await fillBotActions('hunter', actions)) actions = await fetchActions(g.day, 'hunter');
-      const seats = expectedSeats('hunter');
-      const key = `h${g.day}`;
-      const changed = bankCharge(key, seats, actions) || bankTick(key, seats, actions);
-      const extra = bankExtra(seats, actions);
-      if (allActed('hunter', actions) || now >= g.deadline + extra) await resolveHunter(actions);
-      else if (changed) await saveGame();
-    }
-  } catch (error) {
-    toast(`判定出错：${friendlyError(error)}`);
-  } finally {
-    hostBusy = false;
-  }
-}
-
-// ---------- 站长踢人与人机 ----------
-
-async function processKickRequest() {
-  if (!g || !g.kicked) return false;
-  const rows = await fetchActions(g.day, 'kick');
-  const request = rows.find((row) => {
-    if (!row.payload?.kick) return false;
-    const kicker = rowBySeat(row.seat);
-    if (!kicker || kicker.name !== OWNER_NAME) return false;
-    const target = Number(row.target);
-    return target > 0 && target !== row.seat && !g.kicked.includes(target);
-  });
-  if (!request) return false;
-  await resolveKick(request);
-  return true;
-}
-
-async function resolveKick(action) {
-  const target = Number(action.target);
-  const row = rowBySeat(target);
-  if (!row || g.kicked.includes(target)) return;
-  g.kicked.push(target);
-  g.log.push({ day: g.day, kind: 'system', text: `站长把 ${pad(target)} 号请出了房间` });
-  if (g.sheriff === target) {
-    g.sheriff = null;
-    g.log.push({ day: g.day, kind: 'system', text: '警长被请离，警徽作废' });
-  }
-  if (!isAliveSeat(target)) {
-    await saveGame();
-    renderRoom();
-    return;
-  }
-  const deaths = Rules.expandDeaths([{ seat: target, reason: 'kick' }], {
-    alive: aliveSet(),
-    lovers: g.lovers,
-    wolfbeautySeat: roleSeat('wolfbeauty'),
-    charmTarget: g.charmTarget,
-  });
-  const outcome = await applyDeaths(deaths, 'day');
-  if (outcome === 'continue') await saveGame();
-  renderRoom();
-}
-
-function randomOf(list) {
-  return list && list.length ? list[Math.floor(Math.random() * list.length)] : null;
-}
-
-function botNightChoice(step, seat, role) {
-  const others = g.aliveSeats.filter((s) => s !== seat);
-  if (step === 'thief') return { target: null, payload: { card: Math.random() < 0.5 ? 0 : 1 } };
-  if (step === 'cupid') {
-    const a = randomOf(g.aliveSeats);
-    const rest = g.aliveSeats.filter((s) => s !== a);
-    const b = randomOf(rest);
-    return { target: null, payload: a != null && b != null ? { a, b } : {} };
-  }
-  if (step === 'guard') {
-    const pool = others.filter((s) => s !== g.lastGuard);
-    return { target: randomOf(pool), payload: {} };
-  }
-  if (step === 'wolves') {
-    const good = g.aliveSeats.filter((s) => !g.teams.wolves.includes(s));
-    return { target: randomOf(good.length ? good : g.aliveSeats), payload: {} };
-  }
-  if (step === 'wolfbeauty') {
-    const pool = others.filter((s) => s !== g.lastCharm);
-    return { target: randomOf(pool), payload: {} };
-  }
-  if (step === 'witch') {
-    if (g.kill != null && g.potions.save && Math.random() < 0.5) {
-      return { target: null, payload: { save: true } };
-    }
-    if (g.potions.poison && Math.random() < 0.3) {
-      const target = randomOf(others);
-      if (target != null) return { target, payload: { poison: target } };
-    }
-    return { target: null, payload: {} };
-  }
-  if (step === 'seer') {
-    const checked = new Set((g.checks || []).filter((c) => c.seat === seat).map((c) => c.target));
-    const fresh = others.filter((s) => !checked.has(s));
-    return { target: randomOf(fresh.length ? fresh : others), payload: {} };
-  }
-  return null;
-}
-
-function botVoteChoice(step, seat) {
-  let pool = g.aliveSeats.filter((s) => s !== seat);
-  if (step === 'runoff' && g.runoffSeats) pool = pool.filter((s) => g.runoffSeats.includes(s));
-  const target = randomOf(pool);
-  return { target: target ?? -1, payload: {} };
-}
-
-function botHunterChoice(seat) {
-  if (Math.random() < 0.6) {
-    const target = Math.random() < 0.6
-      ? randomOf(g.aliveSeats.filter((s) => s !== seat))
-      : null;
-    return { target, payload: { reveal: true } };
-  }
-  return { target: null, payload: { reveal: false } };
-}
-
-async function fillBotActions(step, actions) {
-  const expected = expectedSeats(step);
-  if (!expected.length) return false;
-  const acted = new Set(actions.map((a) => a.seat));
-  let added = false;
-  for (const seat of expected) {
-    if (acted.has(seat) || !isBotSeat(seat)) continue;
-    const row = rowBySeat(seat);
-    if (!row) continue;
-    let choice;
-    if (step === 'hunter') choice = botHunterChoice(seat);
-    else if (step === 'vote' || step === 'runoff') choice = botVoteChoice(step, seat);
-    else if (step === 'policeSignup') choice = { target: null, payload: { run: false } };
-    else if (step === 'policeVote' || step === 'policeRunoff') {
-      const cands = step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
-      choice = cands.length ? { target: cands[Math.floor(Math.random() * cands.length)], payload: {} } : null;
-    } else if (step === 'policeSpeech' || step === 'lastwords' || step === 'badge' || step === 'order') choice = null;
-    else choice = botNightChoice(step, seat, row.role);
-    if (!choice) continue;
-    const { error } = await client.from('game_actions').insert({
-      room_code: session.code,
-      day: g.day,
-      step,
-      player_id: row.id,
-      target_seat: choice.target ?? null,
-      payload: choice.payload || {},
-    });
-    if (!error) added = true;
-  }
-  return added;
-}
-
-async function resolveNightStep(actions) {
-  const step = g.step;
-  const get = (seat) => actions.find((a) => a.seat === seat);
-
-  if (step === 'thief' && g.thiefSeat) {
-    const row = get(g.thiefSeat);
-    const index = row?.payload?.card === 1 ? 1 : 0;
-    const chosen = g.thiefCards?.[index] || 'villager';
-    await applyThiefChoice(g.thiefSeat, chosen);
-    g.log.push({ day: g.day, kind: 'system', text: '盗贼已经换牌' });
-  } else if (step === 'cupid' && g.cupidSeat) {
-    const row = get(g.cupidSeat);
-    const a = row?.payload?.a;
-    const b = row?.payload?.b;
-    if (a && b && a !== b && isAliveSeat(a) && isAliveSeat(b)) g.lovers = [a, b];
-    g.log.push({ day: g.day, kind: 'system', text: '丘比特已经连好情侣' });
-  } else if (step === 'guard') {
-    const seat = roleSeat('guard');
-    const row = get(seat);
-    const target = row?.target;
-    if (target && target !== g.lastGuard && isAliveSeat(target)) {
-      g.guarded = target;
-      g.lastGuard = target;
-    }
-  } else if (step === 'wolves') {
-    const top = Rules.wolfKillTop(actions, g.teams.wolves, aliveSet());
-    g.kill = top.length ? top[Math.floor(Math.random() * top.length)] : null;
-  } else if (step === 'wolfbeauty') {
-    const seat = roleSeat('wolfbeauty');
-    const row = get(seat);
-    const target = row?.target;
-    if (target && target !== seat && target !== g.lastCharm && isAliveSeat(target)) {
-      g.charmTarget = target;
-      g.lastCharm = target;
-    }
-  } else if (step === 'witch') {
-    const seat = roleSeat('witch');
-    const row = get(seat);
-    const payload = row?.payload || {};
-    let save = Boolean(payload.save) && g.potions.save && g.kill != null;
-    let poison = payload.poison;
-    if (poison != null && (!isAliveSeat(poison) || !g.potions.poison)) poison = null;
-    if (save && poison != null) poison = null;
-    if (save) { g.saved = true; g.potions.save = false; }
-    if (poison != null) { g.poison = poison; g.potions.poison = false; }
-  } else if (step === 'seer') {
-    const seat = roleSeat('seer');
-    const row = get(seat);
-    const target = row?.target;
-    if (target && target !== seat && isAliveSeat(target)) {
-      g.checks.push({ day: g.day, target, killer: g.teams.wolves.includes(target), seat });
-    }
-  }
-
-  g.nightIndex += 1;
-  if (g.nightIndex < g.nightQueue.length) {
-    await enterStep(g.nightQueue[g.nightIndex]);
-    renderRoom();
-  } else {
-    await finishNight();
-  }
-}
-
-async function applyThiefChoice(seat, roleKey) {
-  const row = hostRoles.find((r) => r.seat === seat);
-  if (!row) return;
-  const { error } = await client.from('players').update({ role: roleKey }).eq('id', row.id);
-  if (error) throw error;
-  row.role = roleKey;
-  const rolesBySeat = {};
-  hostRoles.forEach((r) => { rolesBySeat[r.seat] = r.role; });
-  g.teams = Rules.groupsFromRoles(rolesBySeat);
-  if (myRow?.seat === seat) {
-    myRow.role = roleKey;
-    renderRoom();
-  }
-}
-
-async function finishNight() {
-  const alive = aliveSet();
-  const rawDeaths = [];
-  if (g.kill != null) {
-    const guarded = g.guarded === g.kill;
-    const survives = guarded !== g.saved;
-    if (!survives) rawDeaths.push({ seat: g.kill, reason: 'wolf' });
-  }
-  if (g.poison != null) rawDeaths.push({ seat: g.poison, reason: 'poison' });
-
-  const beast = roleSeat('wolfbeauty');
-  const deaths = Rules.expandDeaths(rawDeaths, {
-    alive,
-    lovers: g.lovers,
-    wolfbeautySeat: beast,
-    charmTarget: g.charmTarget,
-  });
-
-  g.kill = null;
-  g.guarded = null;
-  g.saved = false;
-  g.poison = null;
-
-  g.log.push({ day: g.day, kind: 'dawn', text: `第 ${g.day} 天 · 天亮了` });
-  const outcome = await applyDeaths(deaths, 'night');
-  if (outcome !== 'continue') return;
-
-  await continueAfterDeaths('dawn');
-}
-
-async function applyDeaths(deaths, when) {
-  if (!deaths.length && when === 'night') {
-    g.log.push({ day: g.day, kind: 'dawn', text: '昨夜是平安夜' });
-  }
-  deaths.forEach((death) => {
-    g.aliveSeats = g.aliveSeats.filter((s) => s !== death.seat);
-    g.deaths.push({ day: g.day, seat: death.seat, reason: death.reason });
-    g.log.push({ day: g.day, kind: 'death', text: `${pad(death.seat)} 号出局${REASON_LABEL[death.reason] || ''}` });
-    queueLastWords(death, when);
-  });
-  if (g.sheriff != null && deaths.some((d) => d.seat === g.sheriff
-    && d.reason !== 'selfboom' && d.reason !== 'kick')) {
-    g.badgePending = g.sheriff;
-  }
-  if (deaths.length) {
-    const ids = hostRoles
-      .filter((row) => deaths.some((d) => d.seat === row.seat))
-      .map((row) => row.id);
-    if (ids.length) {
-      await client.from('players').update({ alive: false }).in('id', ids);
-      hostRoles.forEach((row) => {
-        if (deaths.some((d) => d.seat === row.seat)) row.alive = false;
-      });
-    }
-  }
-
-  const hunterDeath = deaths.find((death) => {
-    const row = rowBySeat(death.seat);
-    return row?.role === 'hunter' && death.reason !== 'poison' && death.reason !== 'explode' && death.reason !== 'kick';
-  });
-  if (hunterDeath && !g.hunterUsed) {
-    g.hunterUsed = true;
-    g.hunterPending = hunterDeath.seat;
-    g.hunterFrom = when;
-    g.phase = 'hunter';
-    g.step = 'hunter';
-    g.deadline = Date.now() + DUR.hunter;
-    await saveGame();
-    renderRoom();
-    return 'hunter';
-  }
-
-  const win = checkWin();
-  if (win) {
-    await finishGame(win.winner, win.reason);
-    return 'finished';
-  }
-  return 'continue';
-}
-
-function queueLastWords(death, when) {
-  if (death.reason === 'selfboom' || death.reason === 'kick') return;
-  if (when === 'night' && g.day <= 1) return;
-  if (!g.lastWordsQueue.includes(death.seat)) g.lastWordsQueue.push(death.seat);
-}
-
-async function continueAfterDeaths(resume) {
-  g.deathResume = resume || g.deathResume || 'night';
-  if (await startBadgeIfNeeded()) return;
-  if (await startLastWordsIfAny()) return;
-  await resumeAfterScene();
-}
-
-async function resumeAfterScene() {
-  const target = g.deathResume || 'night';
-  g.deathResume = null;
-  if (target === 'dawn') {
-    await startDawn(false);
-  } else if (target === 'day') {
-    g.phase = 'day';
-    g.step = 'day';
-    g.deadline = Date.now() + DUR.speech;
-    await saveGame();
-    renderRoom();
-  } else {
-    await startNightInternal(false);
-  }
-}
-
-async function startBadgeIfNeeded() {
-  if (g.badgePending == null) return false;
-  const seat = g.badgePending;
-  if (g.sheriff !== seat) {
-    g.badgePending = null;
-    return false;
-  }
-  g.phase = 'badge';
-  g.step = 'badge';
-  g.deadline = Date.now() + DUR.badge;
-  g.log.push({ day: g.day, kind: 'system', text: `警长 ${pad(seat)} 号出局，${Math.round(DUR.badge / 1000)} 秒内可把警徽移交给一名存活玩家，否则警徽作废` });
-  await saveGame();
-  renderRoom();
-  return true;
-}
-
-async function resolveBadge(actions) {
-  const seat = g.badgePending;
-  const row = (actions || []).find((a) => a.seat === seat);
-  const target = row?.target != null && Number(row.target) > 0 ? Number(row.target) : null;
-  g.badgePending = null;
-  if (target != null && isAliveSeat(target)) {
-    g.sheriff = target;
-    g.log.push({ day: g.day, kind: 'system', text: `警徽移交给 ${pad(target)} 号，${pad(target)} 号成为新警长（投票算 1.5 票）` });
-  } else {
-    g.sheriff = null;
-    g.log.push({ day: g.day, kind: 'system', text: '警长没有移交，警徽作废' });
-  }
-  if (await startLastWordsIfAny()) return;
-  await resumeAfterScene();
-}
-
-async function startLastWordsIfAny() {
-  while (g.lastWordsQueue.length) {
-    const seat = g.lastWordsQueue.shift();
-    if (isBotSeat(seat)) {
-      g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号（人机）没有遗言` });
-      continue;
-    }
-    g.lastWordsSeat = seat;
-    g.phase = 'lastwords';
-    g.step = 'lastwords';
-    g.deadline = Date.now() + DUR.lastwords;
-    g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号发表遗言（${Math.round(DUR.lastwords / 1000)} 秒）` });
-    await saveGame();
-    renderRoom();
-    return true;
-  }
-  return false;
-}
-
-async function endLastWords() {
-  g.lastWordsSeat = null;
-  if (await startLastWordsIfAny()) return;
-  await resumeAfterScene();
-}
-
-function checkWin() {
-  return Rules.winCheck({
-    alive: aliveSet(),
-    teams: g.teams,
-    lovers: g.lovers,
-    cupidSeat: g.cupidSeat,
-  });
-}
-
-function crossLovers() {
-  if (!g?.lovers) return false;
-  const wolves = g.teams.wolves;
-  return g.lovers.some((seat) => wolves.includes(seat)) && g.lovers.some((seat) => !wolves.includes(seat));
-}
-
-function didPlayerWin(row) {
-  const wolves = g.teams.wolves;
-  if (g.winner === 'lovers') {
-    return (g.lovers || []).includes(row.seat) || row.seat === g.cupidSeat;
-  }
-  if (row.role === 'cupid') {
-    if (!g.lovers) return g.winner === 'good';
-    if (crossLovers()) return false;
-    const loversWolf = g.lovers.every((seat) => wolves.includes(seat));
-    return (g.winner === 'wolf') === loversWolf;
-  }
-  return g.winner === 'wolf' ? wolves.includes(row.seat) : !wolves.includes(row.seat);
-}
-
-async function applyRatings() {
-  if (!isHost() || !g || g.ratingApplied || !hostRoles.length) return;
-  const humans = hostRoles.filter((row) => !row.is_bot);
-  if (!humans.length) return;
-  const names = [...new Set(humans.map((row) => row.name))];
-  const { data, error } = await client
-    .from('ratings')
-    .select('name, rating, games, wins')
-    .in('name', names);
-  if (error) {
-    toast('评分表还没建好：房主先在 Supabase 运行 supabase/migration-v4.sql');
-    return;
-  }
-  const base = new Map((data || []).map((row) => [row.name, row]));
-  const entries = humans.map((row) => {
-    const old = base.get(row.name) || { rating: 1500, games: 0, wins: 0 };
-    return {
-      seat: row.seat,
-      name: row.name,
-      role: row.role,
-      rating: old.rating,
-      games: old.games || 0,
-      wins: old.wins || 0,
-      win: didPlayerWin(row),
-    };
-  });
-  const total = currentMode().roles.length;
-  const k = total <= 6 ? 32 : total <= 9 ? 28 : 24;
-  const calc = Rules.computeTeamElo(entries, k);
-  const upserts = new Map();
-  calc.forEach((player) => {
-    const old = entries.find((entry) => entry.name === player.name);
-    upserts.set(player.name, {
-      name: player.name,
-      rating: player.after,
-      games: (old?.games || 0) + 1,
-      wins: (old?.wins || 0) + (player.win ? 1 : 0),
-      updated_at: new Date().toISOString(),
-    });
-  });
-  const { error: saveError } = await client
-    .from('ratings')
-    .upsert([...upserts.values()], { onConflict: 'name' });
-  if (saveError) {
-    toast(`评分写入失败：${friendlyError(saveError)}`);
-    return;
-  }
-
-  g.rating = {
-    k,
-    players: calc.map((player) => {
-      const row = hostRoles.find((item) => item.seat === player.seat) || {};
-      const old = base.get(row.name) || { games: 0, wins: 0 };
-      const death = (g.deaths || []).filter((item) => item.seat === player.seat).slice(-1)[0] || null;
-      return {
-        seat: player.seat,
-        name: row.name,
-        role: row.role,
-        win: player.win,
-        alive: isAliveSeat(player.seat),
-        death,
-        votesReceived: (g.voteHistory || []).reduce((sum, item) => sum + (item.counts?.[player.seat] || 0), 0),
-        before: player.before,
-        delta: player.delta,
-        after: player.after,
-        games: (old.games || 0) + 1,
-        wins: (old.wins || 0) + (player.win ? 1 : 0),
-      };
-    }),
-  };
-  g.ratingApplied = true;
-  calc.forEach((player) => ratings.set(player.name, player.after));
-}
-
-async function saveReplay() {
-  if (!g || !session || g.replaySaved) return;
-  const mode = currentMode();
-  try {
-    const { data, error } = await client
-      .from('game_actions')
-      .select('day, step, player_id, target_seat, payload, created_at')
-      .eq('room_code', session.code)
-      .order('created_at', { ascending: true })
-      .limit(3000);
-    if (error) throw error;
-    const seatOf = new Map(hostRoles.map((row) => [row.id, row.seat]));
-    const events = [];
-    (data || []).forEach((row) => {
-      const seat = seatOf.get(row.player_id) ?? null;
-      const payload = row.payload || {};
-      if (payload.explode) {
-        events.push({ t: 'explode', day: row.day, seat, target: payload.target ?? null, at: row.created_at });
-      } else if (row.step === 'chat') {
-        events.push({ t: 'chat', day: row.day, seat, name: payload.name || '', text: payload.text || '', at: row.created_at });
-      } else if (row.step === 'wolfchat') {
-        events.push({ t: 'wolfchat', day: row.day, seat, name: payload.name || '', text: payload.text || '', at: row.created_at });
-      } else if (row.step === 'speech') {
-        events.push({ t: 'speech', day: row.day, seat, at: row.created_at });
-      } else if (row.step === 'vote' || row.step === 'runoff') {
-        events.push({ t: 'vote', day: row.day, step: row.step, seat, target: row.target_seat, at: row.created_at });
-      } else if (row.step === 'kick') {
-        events.push({ t: 'kick', day: row.day, seat, target: row.target_seat, at: row.created_at });
-      } else {
-        events.push({ t: 'night', day: row.day, step: row.step, seat, target: row.target_seat, payload, at: row.created_at });
-      }
-    });
-    const players = hostRoles.map((row) => ({
-      seat: row.seat,
-      name: row.name,
-      role: row.role,
-      is_bot: Boolean(row.is_bot),
-      death: (g.deaths || []).filter((death) => death.seat === row.seat).slice(-1)[0] || null,
-      kicked: (g.kicked || []).includes(row.seat),
-    }));
-    const { error: insertError } = await client.from('replays').insert({
-      room_code: session.code,
-      mode: g.mode,
-      mode_name: mode.name,
-      winner: g.winner,
-      win_reason: g.winReason,
-      days: g.day,
-      players,
-      log: g.log,
-      events,
-      rating: g.rating || null,
-    });
-    if (insertError) throw insertError;
-    g.replaySaved = true;
-    g.replayError = null;
-  } catch (error) {
-    g.replayError = friendlyError(error);
-  }
-}
-
-async function finishGame(winner, reason) {
-  g.phase = 'finished';
-  g.step = 'finished';
-  g.deadline = null;
-  g.winner = winner;
-  g.winReason = reason;
-  const label = winner === 'wolf' ? '狼人阵营获胜' : winner === 'lovers' ? '第三方阵营获胜' : '好人阵营获胜';
-  g.log.push({ day: g.day, kind: 'finish', text: `游戏结束：${label}（${reason}）` });
-  stopHost();
-  try {
-    await applyRatings();
-  } catch (error) {
-    toast(`评分结算失败：${friendlyError(error)}`);
-  }
-  await saveReplay();
-  await saveGame();
-  await loadAllRoles();
-  renderRoom();
-  renderGameOver();
-}
-
-async function startDawn(logHeader = true) {
-  g.phase = 'dawn';
-  g.step = 'dawn';
-  g.deadline = Date.now() + DUR.dawn;
-  if (logHeader) g.log.push({ day: g.day, kind: 'dawn', text: `第 ${g.day} 天 · 天亮了` });
-  await saveGame();
-  renderRoom();
-}
-
-function orderFrom(startSeat, alive, dir) {
-  const sorted = alive.slice().sort((a, b) => a - b);
-  if (!sorted.length) return [];
-  const cycle = dir === 'ccw' ? sorted.slice().reverse() : sorted;
-  let at = cycle.findIndex((s) => s === startSeat);
-  if (at < 0) {
-    const next = dir === 'ccw'
-      ? cycle.findIndex((s) => s < startSeat)
-      : cycle.findIndex((s) => s > startSeat);
-    at = next >= 0 ? next : 0;
-  }
-  return cycle.slice(at).concat(cycle.slice(0, at));
-}
-
-async function startDay() {
-  g.phase = 'day';
-  g.step = 'day';
-  const alive = g.aliveSeats.filter((s) => !isBotSeat(s)).sort((a, b) => a - b);
-  const hasBots = g.aliveSeats.some((s) => isBotSeat(s));
-  const todayDeaths = (g.deaths || []).filter((d) => d.day === g.day);
-  const sheriffFirst = g.sheriff != null && alive.includes(g.sheriff) && alive.length > 1;
-  const dir = sheriffFirst ? (g.speechDir === 'ccw' ? 'ccw' : 'cw') : 'cw';
-  const startSeat = sheriffFirst
-    ? g.sheriff
-    : (todayDeaths.length ? Math.min(...todayDeaths.map((d) => d.seat)) + 1 : 1);
-  g.speechDir = dir;
-  g.speechOrder = orderFrom(startSeat, alive, dir);
-  g.speechIndex = 0;
-  g.deadline = g.speechOrder.length ? Date.now() + DUR.speech : 0;
-  const fromText = sheriffFirst
-    ? `从警长 ${pad(startSeat)} 号${dir === 'ccw' ? '逆' : '顺'}时针`
-    : (todayDeaths.length ? `从死者下家 ${pad(startSeat)} 号开始顺时针` : '从 01 号开始顺时针');
-  g.log.push({
-    day: g.day,
-    kind: 'system',
-    text: `第 ${g.day} 天讨论开始，${fromText}，发言顺序：${g.speechOrder.map(pad).join(' → ') || '无'}（每人 ${Math.round(DUR.speech / 1000)} 秒${hasBots ? '，人机不发言' : ''}）`,
-  });
-  if (!g.speechOrder.length) {
-    await startVote();
-    return;
-  }
-  await saveGame();
-  renderRoom();
-}
-
-async function advanceSpeech() {
-  if (!g || g.phase !== 'day') return;
-  const skipped = [];
-  g.speechIndex += 1;
-  while (g.speechIndex < g.speechOrder.length) {
-    const seat = g.speechOrder[g.speechIndex];
-    if (!isAliveSeat(seat)) {
-      g.speechIndex += 1;
-      continue;
-    }
-    if (!isSeatOnline(seat)) {
-      skipped.push(seat);
-      g.speechIndex += 1;
-      continue;
-    }
-    break;
-  }
-  if (skipped.length) {
-    g.log.push({ day: g.day, kind: 'system', text: `${skipped.map(pad).join('、')} 号离线，跳过发言` });
-  }
-  if (g.speechIndex >= g.speechOrder.length) {
-    await startVote();
-    return;
-  }
-  g.deadline = Date.now() + DUR.speech;
-  await saveGame();
-  renderRoom();
-}
-
-async function handleDaySpecial(actions) {
-  const now = Date.now();
-  const knightSeat = roleSeat('knight');
-  const duel = knightSeat != null && !g.knightUsed
-    ? actions.find((a) => a.seat === knightSeat && a.payload?.duel)
-    : null;
-  if (duel) {
-    const target = Number(duel.payload.duel);
-    g.knightUsed = true;
-    if (!isAliveSeat(target) || target === knightSeat) {
-      await saveGame();
-      return true;
-    }
-    if (g.teams.wolves.includes(target)) {
-      g.log.push({ day: g.day, kind: 'system', text: `骑士 ${pad(knightSeat)} 号决斗 ${pad(target)} 号：${pad(target)} 号是狼人，立即出局，直接进入黑夜` });
-      const deaths = Rules.expandDeaths([{ seat: target, reason: 'duel' }], {
-        alive: aliveSet(),
-        lovers: g.lovers,
-        wolfbeautySeat: roleSeat('wolfbeauty'),
-        charmTarget: g.charmTarget,
-      });
-      const outcome = await applyDeaths(deaths, 'day');
-      if (outcome === 'continue') await continueAfterDeaths('night');
-    } else {
-      g.log.push({ day: g.day, kind: 'system', text: `骑士 ${pad(knightSeat)} 号决斗 ${pad(target)} 号：${pad(target)} 号是好人，骑士出局，白天继续` });
-      const deaths = Rules.expandDeaths([{ seat: knightSeat, reason: 'duel' }], {
-        alive: aliveSet(),
-        lovers: g.lovers,
-        wolfbeautySeat: roleSeat('wolfbeauty'),
-        charmTarget: g.charmTarget,
-      });
-      const outcome = await applyDeaths(deaths, 'day');
-      if (outcome === 'continue') await continueAfterDeaths('day');
-    }
-    renderRoom();
-    return true;
-  }
-
-  const boom = findExplodeAction(actions);
-  if (boom) {
-    await resolveExplode(boom);
-    return true;
-  }
-  return false;
-}
-
-// 普通狼人、白狼王可自爆；狼美人不能自爆
-function findExplodeAction(actions) {
-  return actions.find((action) => {
-    if (!action.payload?.explode) return false;
-    if (!isAliveSeat(action.seat)) return false;
-    const row = rowBySeat(action.seat);
-    return row && canSelfExplode(row.role);
-  }) || null;
-}
-
-async function resolveExplode(action) {
-  const seat = action.seat;
-  const row = rowBySeat(seat);
-  const isKing = row?.role === 'wolfking';
-  let target = isKing && action.payload.target != null ? Number(action.payload.target) : null;
-  if (target != null && (!isAliveSeat(target) || target === seat)) target = null;
-  g.log.push({
-    day: g.day,
-    kind: 'system',
-    text: `${isKing ? '白狼王' : '狼人'} ${pad(seat)} 号自爆${target != null ? `，带走 ${pad(target)} 号` : ''}，今天剩余流程全部跳过，立即进入黑夜`,
-  });
-  if (g.sheriff === seat) {
-    g.sheriff = null;
-    g.badgePending = null;
-    g.log.push({ day: g.day, kind: 'system', text: '警长自爆，警徽销毁' });
-  }
-  const raw = [{ seat, reason: 'selfboom' }];
-  if (target != null) raw.push({ seat: target, reason: 'explode' });
-  const deaths = Rules.expandDeaths(raw, {
-    alive: aliveSet(),
-    lovers: g.lovers,
-    wolfbeautySeat: roleSeat('wolfbeauty'),
-    charmTarget: g.charmTarget,
-  });
-  const outcome = await applyDeaths(deaths, 'day');
-  if (outcome === 'continue') await continueAfterDeaths('night');
-  renderRoom();
-}
-
-async function startSheriffSignup() {
-  g.phase = 'sheriff';
-  g.step = 'policeSignup';
-  g.sheriffCandidates = null;
-  g.policeOrder = null;
-  g.policeIndex = 0;
-  g.runoffSeats = null;
-  g.deadline = Date.now() + DUR.policeSignup;
-  g.log.push({ day: g.day, kind: 'system', text: `警长竞选开始：${Math.round(DUR.policeSignup / 1000)} 秒内选择是否上警，超时按不上警处理` });
-  await saveGame();
-  renderRoom();
-}
-
-async function resolveSheriffSignup(actions) {
-  const run = actions
-    .filter((a) => a.payload?.run && isAliveSeat(a.seat))
-    .map((a) => a.seat)
-    .sort((a, b) => a - b);
-  g.sheriffCandidates = run;
-  if (!run.length) {
-    g.sheriffDone = true;
-    g.log.push({ day: g.day, kind: 'system', text: '没有人上警，本局没有警长' });
-    await startDay();
-    return;
-  }
-  if (run.length === 1) {
-    g.sheriff = run[0];
-    g.sheriffDone = true;
-    g.log.push({ day: g.day, kind: 'system', text: `只有 ${pad(run[0])} 号上警，自动当选警长（投票算 1.5 票，每天决定发言方向）` });
-    await startOrderPhase();
-    return;
-  }
-  g.step = 'policeSpeech';
-  g.policeOrder = run;
-  g.policeIndex = 0;
-  g.deadline = Date.now() + DUR.policeSpeech;
-  g.log.push({ day: g.day, kind: 'system', text: `上警的有 ${run.map(pad).join('、')} 号，按座位顺序发言` });
-  await saveGame();
-  renderRoom();
-}
-
-async function advancePoliceSpeech() {
-  if (g.phase !== 'sheriff' || g.step !== 'policeSpeech') return;
-  const order = g.policeOrder || [];
-  g.policeIndex += 1;
-  while (g.policeIndex < order.length && !isAliveSeat(order[g.policeIndex])) g.policeIndex += 1;
-  if (g.policeIndex >= order.length) {
-    await startPoliceVote();
-    return;
-  }
-  g.deadline = Date.now() + DUR.policeSpeech;
-  await saveGame();
-  renderRoom();
-}
-
-async function startPoliceVote(runoffSeats) {
-  g.phase = 'sheriff';
-  g.step = runoffSeats ? 'policeRunoff' : 'policeVote';
-  if (runoffSeats) g.runoffSeats = runoffSeats;
-  g.deadline = Date.now() + DUR[g.step];
-  g.log.push({
-    day: g.day,
-    kind: 'vote',
-    text: runoffSeats
-      ? `警长 PK：${runoffSeats.map(pad).join('、')} 号平票，警下玩家重新投票（${Math.round(DUR.policeRunoff / 1000)} 秒）`
-      : `警下投票开始（${Math.round(DUR.policeVote / 1000)} 秒），没上警的存活玩家投票，候选人不能投`,
-  });
-  await saveGame();
-  renderRoom();
-}
-
-async function resolvePoliceVote(actions) {
-  const cands = g.step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
-  const voters = g.aliveSeats.filter((s) => !cands.includes(s));
-  const rows = actions.filter((a) => voters.includes(a.seat) && cands.includes(a.target));
-  const tally = Rules.tallyVotes(rows);
-  const voteText = rows.map((a) => `${pad(a.seat)}→${pad(a.target)}`).join('、');
-  if (voteText) g.log.push({ day: g.day, kind: 'vote', text: `警下投票：${voteText}` });
-  if (!tally.top.length) {
-    g.sheriff = null;
-    g.sheriffDone = true;
-    g.log.push({ day: g.day, kind: 'system', text: '无人得票，警徽流失，本局没有警长' });
-    await startDay();
-    return;
-  }
-  if (tally.top.length > 1) {
-    if (g.step === 'policeVote') {
-      await startPoliceVote(tally.top);
-      return;
-    }
-    g.sheriff = null;
-    g.sheriffDone = true;
-    g.log.push({ day: g.day, kind: 'system', text: '警下投票再次平票，警徽流失，本局没有警长' });
-    await startDay();
-    return;
-  }
-  const seat = tally.top[0];
-  g.sheriff = seat;
-  g.sheriffDone = true;
-  g.runoffSeats = null;
-  g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号当选警长（${tally.counts[seat]} 票）：投票算 1.5 票，每天从自己开始决定发言方向` });
-  await startOrderPhase();
-}
-
-async function startOrderPhase() {
-  if (g.sheriff == null || !isAliveSeat(g.sheriff) || g.aliveSeats.length <= 1) {
-    await startDay();
-    return;
-  }
-  g.phase = 'order';
-  g.step = 'order';
-  g.deadline = Date.now() + DUR.order;
-  g.log.push({ day: g.day, kind: 'system', text: `警长 ${pad(g.sheriff)} 号选择今天从自己开始顺时针还是逆时针发言` });
-  await saveGame();
-  renderRoom();
-}
-
-async function startVote() {
-  g.phase = 'vote';
-  g.step = 'vote';
-  g.deadline = Date.now() + DUR.vote;
-  g.votes = null;
-  g.runoffSeats = null;
-  g.log.push({ day: g.day, kind: 'vote', text: `投票开始（${Math.round(DUR.vote / 1000)} 秒），不能投自己，可以弃权` });
-  await saveGame();
-  renderRoom();
-}
-
-async function resolveVote(actions) {
-  const eligible = g.aliveSeats.filter((s) => !g.voteBanned.includes(s));
-  let rows = actions.filter((a) => eligible.includes(a.seat));
-  if (g.phase === 'runoff' && g.runoffSeats) {
-    rows = rows.map((a) => ({ ...a, target: g.runoffSeats.includes(a.target) ? a.target : -1 }));
-  }
-  const voteText = rows.map((a) => `${pad(a.seat)}→${a.target > 0 ? pad(a.target) : '弃'}`).join('、');
-  const tally = Rules.tallyVotes(rows);
-  // 警长投票算 1.5 票
-  if (g.sheriff != null && eligible.includes(g.sheriff)) {
-    const sheriffVote = rows.find((a) => a.seat === g.sheriff && a.target > 0);
-    if (sheriffVote) {
-      tally.counts[sheriffVote.target] = (tally.counts[sheriffVote.target] || 0) + 0.5;
-      let max = 0;
-      Object.values(tally.counts).forEach((n) => { if (n > max) max = n; });
-      tally.max = max;
-      tally.top = max === 0 ? [] : Object.keys(tally.counts).filter((key) => tally.counts[key] === max).map(Number);
-    }
-  }
-  g.votes = tally.counts;
-  g.voteHistory = g.voteHistory || [];
-  g.voteHistory.push({ day: g.day, phase: g.phase, counts: { ...tally.counts } });
-
-  if (voteText) g.log.push({ day: g.day, kind: 'vote', text: `投票结果：${voteText}` });
-
-  if (!tally.top.length) {
-    g.log.push({ day: g.day, kind: 'vote', text: '无人得票，本轮无人出局' });
-    await saveGame();
-    await startNightInternal(false);
-    return;
-  }
-
-  if (tally.top.length > 1) {
-    if (g.phase === 'vote') {
-      g.phase = 'runoff';
-      g.step = 'runoff';
-      g.runoffSeats = tally.top;
-      g.deadline = Date.now() + DUR.runoff;
-      g.log.push({ day: g.day, kind: 'vote', text: `平票：${tally.top.map(pad).join('、')} 号进入 PK，请重新投票` });
-      await saveGame();
-      renderRoom();
-      return;
-    }
-    g.log.push({ day: g.day, kind: 'vote', text: '再次平票，本轮无人出局' });
-    await saveGame();
-    await startNightInternal(false);
-    return;
-  }
-
-  const target = tally.top[0];
-  const targetRow = rowBySeat(target);
-  g.log.push({ day: g.day, kind: 'vote', text: `${pad(target)} 号得票最多（${tally.counts[target]} 票）` });
-
-  if (targetRow?.role === 'idiot') {
-    if (!g.idiotRevealed.includes(target)) {
-      g.idiotRevealed.push(target);
-      g.voteBanned.push(target);
-      g.log.push({ day: g.day, kind: 'warning', text: `${pad(target)} 号翻开白痴牌，免于放逐，之后失去投票权` });
-    } else {
-      g.log.push({ day: g.day, kind: 'vote', text: `${pad(target)} 号白痴已翻牌，本轮无人出局` });
-    }
-    await saveGame();
-    await startNightInternal(false);
-    return;
-  }
-
-  const deaths = Rules.expandDeaths([{ seat: target, reason: 'vote' }], {
-    alive: aliveSet(),
-    lovers: g.lovers,
-    wolfbeautySeat: roleSeat('wolfbeauty'),
-    charmTarget: g.charmTarget,
-  });
-  const outcome = await applyDeaths(deaths, 'day');
-  if (outcome !== 'continue') return;
-  await continueAfterDeaths('night');
-}
-
-async function resolveHunter(actions) {
-  const seat = g.hunterPending;
-  const row = actions.find((a) => a.seat === seat);
-  const payload = row?.payload || {};
-  // 没提交/超时默认不翻牌；旧客户端没带 reveal 字段时按“选了目标即翻牌”兼容
-  const reveal = payload.reveal === true || (payload.reveal === undefined && row?.target != null);
-  const target = reveal && row?.target != null ? Number(row.target) : null;
-  const from = g.hunterFrom || 'night';
-  g.hunterPending = null;
-  g.hunterFrom = null;
-
-  if (reveal && target && isAliveSeat(target)) {
-    g.log.push({ day: g.day, kind: 'death', text: `${pad(seat)} 号翻开猎人牌，开枪带走 ${pad(target)} 号` });
-    const deaths = Rules.expandDeaths([{ seat: target, reason: 'hunter' }], {
-      alive: aliveSet(),
-      lovers: g.lovers,
-      wolfbeautySeat: roleSeat('wolfbeauty'),
-      charmTarget: g.charmTarget,
-    });
-    const outcome = await applyDeaths(deaths, 'day');
-    if (outcome === 'continue') await continueAfterDeaths(from === 'night' ? 'dawn' : 'night');
-    return;
-  } else if (reveal) {
-    g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号翻开猎人牌，没有开枪` });
-    const win = checkWin();
-    if (win) {
-      await finishGame(win.winner, win.reason);
-      return;
-    }
-  }
-
-  await continueAfterDeaths(from === 'night' ? 'dawn' : 'night');
-}
-
-async function saveGame() {
-  if (!session || !room || !g) return;
-  g.v = (g.v || 0) + 1;
-  const options = Object.assign({}, room.options || {}, {
-    mode: g.mode,
-    phase: g.phase === 'finished' ? 'finished' : 'playing',
-    g,
-  });
-  const { error } = await client.from('rooms').update({ options }).eq('code', session.code);
-  if (error) {
-    toast(`保存对局状态失败：${friendlyError(error)}`);
-    return;
-  }
-  room = Object.assign({}, room, { options });
-  if (g.phase !== 'finished') manageHost();
-}
-
 function exitRoomLocal(message) {
-  if (selfExited) return;
-  selfExited = true;
+  if (!session) return;
   clearPreSpeech();
+  clearSettlementRetry();
   session = null;
   stopPolling();
-  stopHost();
-  if (channel) {
-    channel.unsubscribe();
-    channel = null;
-  }
   localStorage.removeItem(SESSION_KEY);
   room = null;
   members = [];
   myRow = null;
   g = null;
-  hostRoles = [];
-  allRoles = [];
   pick = null;
   kickAsked = null;
   showHome();
   setStatus(message);
   toast(message);
-  setTimeout(() => { selfExited = false; }, 2000);
-}
-
-async function leaveRoom() {
-  if (g && g.phase !== 'finished' && isHost()) {
-    toast('房主离开会中断整局游戏，请等本局结束');
-    return;
-  }
-  const leaving = session;
-  clearPreSpeech();
-  session = null;
-  stopPolling();
-  stopHost();
-  if (channel) {
-    channel.unsubscribe();
-    channel = null;
-  }
-  localStorage.removeItem(SESSION_KEY);
-  room = null;
-  members = [];
-  myRow = null;
-  g = null;
-  hostRoles = [];
-  showHome();
-  if (leaving) {
-    await client.from('players').delete().eq('id', leaving.playerId);
-  }
-  setStatus('已退出房间');
-}
-
-async function replayGame() {
-  if (!g || g.phase !== 'finished' || !isHost()) return;
-  busy = true;
-  try {
-    await client.from('game_actions').delete().eq('room_code', session.code);
-    const kickedSeats = g.kicked || [];
-    for (const member of members) {
-      if (member.seat && kickedSeats.includes(member.seat)) {
-        await client.from('players').delete().eq('id', member.id);
-        continue;
-      }
-      const { error } = await client
-        .from('players')
-        .update({ role: null, seat: null, alive: true })
-        .eq('id', member.id);
-      if (error) throw error;
-    }
-    const options = { mode: g.mode, phase: 'waiting' };
-    const { error } = await client.from('rooms').update({ options }).eq('code', session.code);
-    if (error) throw error;
-    g = null;
-    hostRoles = [];
-    allRoles = [];
-    clearPreSpeech();
-    room = Object.assign({}, room, { options });
-    phaseKey = '';
-    toast('已重置房间，可以重新开一局');
-    loadMembers();
-    renderRoom();
-    renderGameOver();
-  } catch (error) {
-    toast(`重置失败：${friendlyError(error)}`);
-  } finally {
-    busy = false;
-  }
 }
 
 function friendlyError(error) {
   const message = String(error?.message || error || '未知错误');
-  if (/is_bot|profiles_status_check/i.test(message)) {
-    return '数据库还没升级：先在 Supabase SQL Editor 运行 supabase/migration-v6.sql';
-  }
-  if (/replays/i.test(message)) {
-    if (/permission denied|42501|row-level security/i.test(message)) {
-      return '没有权限读写历史回放：请在 Supabase SQL Editor 运行 supabase/migration-v8.sql';
-    }
-    if (/does not exist|PGRST205|42P01|schema cache|Could not find/i.test(message)) {
-      return '历史回放表还没建好：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
-    }
-    return `历史回放操作失败：${message}`;
-  }
-  if (/JWT|Invalid token|not authenticated|401/i.test(message)) {
-    return '登录状态过期：请退出登录后重新登录';
-  }
-  if (/profiles|username_taken/i.test(message)) {
-    return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
-  }
+  if (/JWT|401|invalid token|not authenticated/i.test(message)) return '登录状态异常，请重新登录';
   if (/fetch|network|Load failed|Failed to fetch/i.test(message)) {
     return '网络连不上服务器，检查加速器后重试';
   }
-  if (/ratings/i.test(message)) {
-    return '评分表还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v4.sql';
-  }
-  if (/relation .* does not exist|column .* does not exist|schema cache|42703|42P01|PGRST205/i.test(message)) {
-    return '数据库还没升级，先在 Supabase SQL Editor 运行 supabase/migration-v3.sql';
-  }
-  if (/permission denied|row-level security/i.test(message)) {
-    return '数据库权限没配好，先运行 supabase/migration-v4.sql（评分）或 migration-v3.sql';
+  if (/does not exist|schema cache|42703|42P01|PGRST205|permission denied|row-level security/i.test(message)) {
+    return '操作不可用，请确认账号已通过审核，或联系站长按 DEPLOYMENT.md 检查 v8 部署。';
   }
   return message;
 }
@@ -5016,36 +2809,25 @@ els.chatForm.addEventListener('submit', (event) => {
   if (!g) return;
   const text = els.chatInput.value.trim();
   if (!text) return;
-  const name = profile?.username || session.name || '';
-  if (g.phase === 'night' && isMyWolf() && isAliveSeat(myRow?.seat)) {
+  const seat = myRow?.seat;
+  if ((g.phase === 'lastwords' && g.lastWordsSeat === seat) ||
+      (g.step === 'policeSpeech' && g.policeOrder[g.policeIndex] === seat && isAliveSeat(seat))) {
     els.chatInput.value = '';
-    act('wolfchat', null, { name, text });
-    setTimeout(loadChat, 300);
+    act('chat', null, {text});
     return;
   }
-  if (g.phase === 'sheriff' && g.step === 'policeSpeech'
-    && (g.policeOrder || [])[g.policeIndex] === myRow?.seat
-    && !submitted.has(`${g.day}:policeSpeech`)) {
+  if (!isAliveSeat(seat)) return;
+  if (g.phase === 'night' && isMyWolf()) {
     els.chatInput.value = '';
-    act('chat', null, { name, text });
-    setTimeout(loadChat, 300);
+    act('wolfchat', null, { text });
     return;
   }
-  if (g.phase === 'lastwords' && g.lastWordsSeat === myRow?.seat
-    && !submitted.has(`${g.day}:lastwords`)) {
-    els.chatInput.value = '';
-    act('chat', null, { name, text });
-    setTimeout(loadChat, 300);
-    return;
-  }
-  if (!isAliveSeat(myRow?.seat)) return;
   if (g.phase !== 'day') return;
   const speaker = currentSpeaker();
   const speechDone = submitted.has(`${g.day}:speech`);
   if (speaker === myRow?.seat && !speechDone) {
     els.chatInput.value = '';
-    act('chat', null, { name, text });
-    setTimeout(loadChat, 300);
+    act('chat', null, { text });
     return;
   }
   if (speaker != null && canPreInput()) {
@@ -5070,18 +2852,7 @@ els.replayBtn.addEventListener('click', () => {
 });
 
 els.watchReplayBtn.addEventListener('click', () => {
-  if (session) openLatestReplay(session.code).catch((error) => toast(friendlyError(error)));
-});
-
-els.saveReplayBtn.addEventListener('click', async () => {
-  if (!g || !isHost() || g.replaySaved) return;
-  els.saveReplayBtn.disabled = true;
-  g.replayError = null;
-  await saveReplay();
-  await saveGame();
-  els.saveReplayBtn.disabled = false;
-  renderGameOver();
-  toast(g.replayError ? `回放仍未保存：${g.replayError}` : '回放已保存，刷新首页就能在「历史对局」里看到');
+  if (g?.replayId) openReplay(g.replayId).catch((error) => toast(friendlyError(error)));
 });
 
 els.spectateBtn.addEventListener('click', () => {
@@ -5089,10 +2860,17 @@ els.spectateBtn.addEventListener('click', () => {
   openSpectate(code).catch((error) => toast(friendlyError(error)));
 });
 
+document.querySelector('#roomLobby').addEventListener('click', showHome);
+const otherSpectateForm = document.querySelector('#otherSpectate');
+otherSpectateForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  openSpectate(document.querySelector('#otherRoomCode').value.trim()).catch(error => toast(friendlyError(error)));
+});
+els.retrySettlement.addEventListener('click', () => retrySettlement().catch(error => toast(friendlyError(error))));
 els.spectateExit.addEventListener('click', exitSpectate);
 
 els.spectateReplayBtn.addEventListener('click', () => {
-  if (spectate) openLatestReplay(spectate.code).catch((error) => toast(friendlyError(error)));
+  if (spectate?.g?.replayId) openReplay(spectate.g.replayId).catch((error) => toast(friendlyError(error)));
 });
 
 els.replayBack.addEventListener('click', () => {
@@ -5153,7 +2931,7 @@ document.querySelector('.navbar a[href="#start"]').addEventListener('click', (ev
 
 document.querySelector('.navbar a[href="#historyCard"]').addEventListener('click', (event) => {
   event.preventDefault();
-  if (session) showHome();
+  if (els.homeView.hidden) showHome();
   if (!accountApproved()) {
     openAuthModal();
     return;
@@ -5265,21 +3043,14 @@ els.registerForm.addEventListener('submit', async (event) => {
     const { data: taken, error: takenError } = await client.rpc('username_taken', { name });
     if (takenError) throw takenError;
     if (taken) throw new Error('这个用户名已经被注册了');
-    const { data: signData, error: signError } = await client.auth.signUp({ email, password: pass });
+    const { data: signData, error: signError } = await client.auth.signUp({ email, password: pass, options: { data: { wolf_username: name } } });
     if (signError) throw signError;
     if (!signData.session) {
-      throw new Error('注册成功但没拿到登录态：请站长先在 Supabase 关闭 Confirm email；如果这个用户名之前注册过，需要先删掉旧账号');
-    }
-    const { error: profileError } = await client
-      .from('profiles')
-      .insert({ id: signData.user.id, username: name });
-    if (profileError) {
-      await client.auth.signOut().catch(() => {});
-      throw profileError;
+      throw new Error('账号已创建但未取得登录态，请联系站长检查邮箱确认设置后重新登录。');
     }
     localStorage.setItem(NAME_KEY, name);
     await fetchProfileAndRoute();
-    toast(name === OWNER_NAME ? '站长账号已创建' : '注册成功，等待站长或管理员审核');
+    toast('注册成功，等待站长或管理员审核');
   } catch (error) {
     const reason = friendlyAuthError(error);
     setStatus(`注册失败 · ${reason}`);
@@ -5306,6 +3077,9 @@ async function manualRefreshAccount() {
 
 els.refreshStatusBtn.addEventListener('click', manualRefreshAccount);
 els.pendingRefresh.addEventListener('click', manualRefreshAccount);
+document.querySelector('#adminFilter').addEventListener('change',()=>{ adminPage=0; loadAdmin(); });
+document.querySelector('#adminPrev').addEventListener('click',()=>{ adminPage=Math.max(0,adminPage-1); loadAdmin(); });
+document.querySelector('#adminNext').addEventListener('click',()=>{ adminPage++; loadAdmin(); });
 els.adminRefresh.addEventListener('click', () => {
   if (!isAdminAccount()) return;
   loadAdmin();
@@ -5352,37 +3126,6 @@ function guardClient() {
   if (client) return true;
   toast('服务器还没配置好，稍等主人填一下地址');
   return false;
-}
-
-async function restoreSession() {
-  const saved = localStorage.getItem(SESSION_KEY);
-  if (!saved) return;
-  let parsed;
-  try {
-    parsed = JSON.parse(saved);
-  } catch {
-    localStorage.removeItem(SESSION_KEY);
-    return;
-  }
-  const { data } = await client
-    .from('players')
-    .select('id, name, room_code')
-    .eq('id', parsed.playerId)
-    .maybeSingle();
-  if (!data) {
-    localStorage.removeItem(SESSION_KEY);
-    return;
-  }
-  const { data: roomRow } = await client
-    .from('rooms')
-    .select('code')
-    .eq('code', data.room_code)
-    .maybeSingle();
-  if (!roomRow) {
-    localStorage.removeItem(SESSION_KEY);
-    return;
-  }
-  enterRoom({ code: data.room_code, playerId: parsed.playerId, name: data.name || parsed.name || '' });
 }
 
 async function boot() {

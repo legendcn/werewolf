@@ -16,13 +16,26 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  let pathname = decodeURIComponent(url.pathname);
-  if (pathname.endsWith('/')) pathname += 'index.html';
+function assetPath(url, offline = false) {
+  const pathname = decodeURIComponent(new URL(url, 'http://localhost').pathname);
+  if (pathname.includes('\0')) throw new Error('invalid path');
+  const asset = path.posix.normalize(pathname.endsWith('/') ? `${pathname}index.html` : pathname);
+  if (offline && asset === '/js/config.js') return path.join(root, 'examples', 'config.js');
+  return /^\/(?:(?:index|rules)\.html|styles\.css|(?:js|vendor|supabase\/functions\/_shared)\/[\w.-]+\.(?:js|css))$/.test(asset)
+    ? path.join(root, asset) : null;
+}
 
-  const filePath = path.join(root, path.normalize(pathname));
-  if (!filePath.startsWith(root + path.sep)) {
+const offline = process.argv.includes('--offline');
+const server = http.createServer((req, res) => {
+  let filePath;
+  try {
+    filePath = assetPath(req.url, offline);
+  } catch {
+    res.writeHead(400);
+    res.end('Bad Request');
+    return;
+  }
+  if (!filePath) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
@@ -40,6 +53,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(port, () => {
-  console.log(`狼人杀本地预览: http://localhost:${port}`);
+module.exports = { assetPath };
+if (require.main === module) server.listen(port, () => {
+  console.log(`狼人杀${offline ? '离线' : '本地'}预览: http://localhost:${port}`);
 });
