@@ -552,14 +552,17 @@ async function afterApproved() {
   setAuthNote('');
   setStatus(`已登录：${profile.username}（${roleLabel(profile.role)}）`);
   closeAuthModal();
-  loadLeaderboard();
-  loadHistory();
+  // Resume the game before spending requests on lobby-only data.
   try {
     await restoreSession();
   } catch (error) {
     if (epoch !== authEpoch) return;
     setStatus('房间暂时无法恢复，重连信息已保留。刷新可重试。');
     toast(friendlyError(error));
+  }
+  if (epoch === authEpoch && !session) {
+    loadLeaderboard();
+    loadHistory();
   }
 }
 

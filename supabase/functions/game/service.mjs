@@ -138,6 +138,7 @@ export async function dispatch(q, uid, cmd) {
     me.online = true;
   }
   const before = JSON.stringify(g), wasFinished = g?.phase === 'finished';
+  const oldSeats = new Map(rows.map(({ id, role, seat, alive }) => [id, { role, seat, alive }]));
   const privileged = account.role === 'owner';
   let changed = false;
   // Never convert a failed read into an empty vote. Chat is paged separately.
@@ -206,12 +207,19 @@ export async function dispatch(q, uid, cmd) {
     );
   }
   if (g && JSON.stringify(g) !== before) {
-    // Includes deals, transformations and deaths in the same commit as the state.
-    for (const p of rows) {
+    // The room lock protects both snapshots. Phase-only updates need no roster
+    // write; deals, transformations and deaths still commit with the game state.
+    const seats = [];
+    for (const { id, role, seat, alive } of rows) {
+      const old = oldSeats.get(id);
+      if (role !== old.role || seat !== old.seat || alive !== old.alive) seats.push({ id, role, seat, alive });
+    }
+    if (seats.length) {
       await q(
-        `update public.players set role=$2,seat=$3,alive=$4 where id=$1
-      and (role,seat,alive) is distinct from ($2,$3,$4)`,
-        [p.id, p.role, p.seat, p.alive],
+        `update public.players as p set role=v.role, seat=v.seat, alive=v.alive
+        from jsonb_to_recordset($2::text::jsonb) as v(id uuid, role text, seat int, alive boolean)
+        where p.room_code=$1 and p.id=v.id`,
+        [code, JSON.stringify(seats)],
       );
     }
     if (!wasFinished && g.phase === 'finished') {

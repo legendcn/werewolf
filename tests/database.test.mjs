@@ -146,7 +146,14 @@ test('v8 migration and concurrent game transactions', async (t) => {
   }
   assert.deepEqual((await appoint(fixed,null)).appointments, {});
   assert.deepEqual((await appoint(fixed,'witch')).appointments, {[fixed]:'witch'});
-  const opened = await call(ids[0], 'start');
+  let rosterWrites = 0;
+  const countRosterWrites = sql => {
+    if (/^update public\.players\b.*\bset role=/i.test(sql)) rosterWrites++;
+  };
+  const opened = await call(ids[0], 'start', {}, countRosterWrites);
+  assert.equal(rosterWrites, 1, 'deal all seats in one write');
+  const [deal] = await db`select count(distinct seat) seats, count(role) dealt from players where room_code=${code}`;
+  assert.deepEqual([deal.seats, deal.dealt], ['6', '6']);
   assert.equal((await call(viewer, 'snapshot')).me.role, 'witch');
   await assert.rejects(appoint(fixed,null), /发牌前/);
   assert.ok(!('appointments' in await call(ids[1], 'snapshot')));
@@ -170,9 +177,11 @@ test('v8 migration and concurrent game transactions', async (t) => {
     payload: { text: 'private discussion' },
   });
   assert.equal((await call(outsider, 'spectate')).chat.length, 0);
-  // Election submissions share the same locked room, including across concurrent requests.
-  await db`update rooms set options=jsonb_set(options,'{g}',(options->'g') || '{"phase":"dawn","step":"dawn","deadline":0}'::jsonb) where rooms.code=${code}`;
-  assert.equal((await call(ids[1], 'snapshot')).options.g.step, 'policeSignup');
+  // Seed a saved six-player game from before new deals stopped electing a sheriff.
+  await db`update rooms set options=jsonb_set(options,'{g}',(options->'g') || '{"phase":"dawn","step":"dawn","deadline":0,"sheriffDone":false}'::jsonb) where rooms.code=${code}`;
+  rosterWrites = 0;
+  assert.equal((await call(ids[1], 'snapshot', {}, countRosterWrites)).options.g.step, 'policeSignup');
+  assert.equal(rosterWrites, 0, 'a phase-only change must not write any seats');
   const signup = (id, run) => call(id,'act',{day:1, matchId, step:'policeSignup', payload:{run}});
   const attempts = await Promise.allSettled([signup(wolves[0].account_id,true), signup(wolves[0].account_id,true)]);
   assert.equal(attempts.filter(r => r.status === 'fulfilled').length,1);
@@ -200,7 +209,10 @@ test('v8 migration and concurrent game transactions', async (t) => {
   assert.equal(view.chat.length, 500);
   assert.equal(view.chat[0].payload.text, '6');
   const departure = wolves.map(w => ({playerId:w.id, matchId}));
-  await call(wolves[0].account_id, 'leave', departure[0]);
+  rosterWrites = 0;
+  await call(wolves[0].account_id, 'leave', departure[0], countRosterWrites);
+  assert.equal(rosterWrites, 1);
+  assert.equal((await db`select alive from players where id=${wolves[0].id}`)[0].alive, false);
   assert.equal((await call(wolves[0].account_id, 'restore')).gone, true);
   assert.ok(!(await call(outsider, 'spectate')).options.g.aliveSeats.includes(wolves[0].seat));
   let retry;
