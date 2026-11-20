@@ -1,10 +1,15 @@
 // Authenticated game commands. Raw roles, action rows and authoritative state
 // never travel over the browser's Supabase table/realtime clients.
 async function gameRequest(op, code, args = {}) {
+  const epoch = authEpoch;
   const { data, error } = await client.functions.invoke('game', { body: { op, code, ...args } });
+  if (epoch !== authEpoch) throw new Error('登录状态已变化');
   if (error) {
     const status = error.context?.status;
-    if (status === 401) throw new Error('登录状态过期，请重新登录');
+    if (status === 401) {
+      showAuthScreen();
+      throw new Error('登录状态过期，请重新登录');
+    }
     let reason = error.message;
     if (error.context?.headers?.get('content-type')?.includes('application/json')) {
       const body = await error.context.json().catch(() => null);
@@ -20,8 +25,10 @@ async function gameRequest(op, code, args = {}) {
   return data;
 }
 async function createRoom() {
+  const epoch = authEpoch;
   for (let i = 0; i < 6; i++) {
     const result = await gameRequest('create', randomCode(), { mode: els.modeSelect.value });
+    if (epoch !== authEpoch) return;
     if (!result.collision) {
       enterRoom(result);
       return;
@@ -30,9 +37,12 @@ async function createRoom() {
   throw new Error('房间码生成失败，请重试');
 }
 async function joinRoom(_name, code) {
-  enterRoom(await gameRequest('join', code));
+  const epoch = authEpoch;
+  const result = await gameRequest('join', code);
+  if (epoch === authEpoch) enterRoom(result);
 }
 async function restoreSession() {
+  const epoch = authEpoch;
   const saved = localStorage.getItem(SESSION_KEY);
   if (!saved) return;
   let parsed;
@@ -47,7 +57,7 @@ async function restoreSession() {
     return;
   }
   const result = await gameRequest('restore', parsed.code);
-  if (session || localStorage.getItem(SESSION_KEY) !== saved) return;
+  if (epoch !== authEpoch || session || localStorage.getItem(SESSION_KEY) !== saved) return;
   if (result.gone) localStorage.removeItem(SESSION_KEY);
   else enterRoom(result);
 }
@@ -134,14 +144,14 @@ async function roomCommand(op, args) {
 }
 async function pollOnce() {
   if (!session || document.hidden || polling) return;
-  polling = true;
+  const active = polling = session;
   try {
     if (++pollTick % 8 === 0) refreshProfileQuiet().catch(() => {});
     await roomCommand('snapshot');
   } catch (error) {
-    setConn(`同步失败，正在重试：${friendlyError(error)}`);
+    if (session === active) setConn(`同步失败，正在重试：${friendlyError(error)}`);
   } finally {
-    polling = false;
+    if (polling === active) polling = null;
   }
 }
 async function startGame() {
@@ -158,15 +168,19 @@ async function startGame() {
 function replayGame() {
   return roomCommand('reset', { matchId: g?.matchId });
 }
-function leaveRoom() {
-  return roomCommand('leave');
+function departureContext() {
+  if (!room || !session) throw new Error('房间尚未同步，请稍后重试');
+  return { playerId: session.playerId, matchId: g?.matchId ?? null, ...(!g ? { lobbyRevision: room.revision } : {}) };
+}
+async function leaveRoom() {
+  return roomCommand('leave', departureContext());
 }
 function addBot() {
   return roomCommand('bot');
 }
-function kickMember(member) {
+async function kickMember(member) {
   kickAsked = null;
-  return roomCommand('kick', { id: member.id });
+  return roomCommand('kick', { id: member.id, ...departureContext() });
 }
 async function act(step, target, payload = {}) {
   if (!g) return false;

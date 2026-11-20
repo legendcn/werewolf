@@ -234,6 +234,41 @@ test('spectating another room keeps the seat and last frame, recovers then pause
   assert.equal(note.hidden, true);
 });
 
+test('SIGNED_OUT purges private DOM, drafts and polling; late room and replay responses cannot restore them', async t => {
+  let authChanged, finishRoom, finishReplay;
+  const { run, w } = await page(t, {
+    auth: { onAuthStateChange(cb) { authChanged = cb; }, async getSession() { return {data:{session:null}}; } },
+    functions: { invoke: () => new Promise(resolve => { finishRoom = resolve; }) },
+    from: () => ({select() { return this; }, eq() { return this; }, maybeSingle() {
+      return new Promise(resolve => { finishReplay = resolve; });
+    }}),
+  });
+  run(`profile={id:'old',status:'approved'}; session={code:'123456',playerId:'p'};
+    room={revision:1}; myRow={seat:1,role:'werewolf'}; g={phase:'night'}; roleShown=true;
+    wolfChatRows=[{payload:{name:'狼',text:'PRIVATE_CHAT'}}]; renderChat();
+    els.roleName.textContent='PRIVATE_ROLE'; els.chatInput.value='unsent';
+    preSpeech={day:1,msgs:['PRIVATE_DRAFT']}; savePreSpeech(); showRoom(); startPolling();`);
+  const lateRoom = run(`roomCommand('snapshot')`), lateReplay = run(`openReplay(1)`);
+  authChanged('SIGNED_OUT');
+  assert.equal(run('session === null && g === null && myRow === null && !roleShown && pollTimer === null'),true);
+  assert.equal(run('wolfChatRows.length + preSpeech.msgs.length'),0);
+  assert.equal(w.localStorage.getItem('wolf.prespeech:123456:p'),null);
+  assert.equal(w.document.querySelector('#chatInput').value,'');
+  assert.equal(w.document.querySelector('#roomView').hidden,true);
+  assert.doesNotMatch(w.document.body.textContent,/PRIVATE_ROLE|PRIVATE_CHAT/);
+  run(`profile={id:'new',status:'approved'}`);
+  finishRoom({data:{revision:10,code:'123456'}}); finishReplay({data:{room_code:'old'}});
+  await assert.rejects(lateRoom,/登录状态已变化/); await lateReplay;
+  assert.equal(run('room === null && replayData === null && els.replayView.hidden'),true);
+});
+
+test('kick and leave send the original member, match or waiting-room revision', async t => {
+  const { run, w } = await page(t); const sent=[]; w.capture=(op,args)=>sent.push([op,JSON.parse(JSON.stringify(args))]);
+  run(`session={code:'123456',playerId:'me'}; room={revision:12}; roomCommand=capture;`);
+  await run(`kickMember({id:'you'})`); run(`g={matchId:'new'}`); await run(`leaveRoom()`);
+  assert.deepEqual(sent,[['kick',{id:'you',playerId:'me',matchId:null,lobbyRevision:12}],['leave',{playerId:'me',matchId:'new'}]]);
+});
+
 test('manual settlement retry repeats only a confirmed rolled-back operation with its precondition', async (t) => {
   const requests = [], retry = { matchId: 'match', revision: 9 };
   const { run, w } = await page(t, { functions: { invoke: async (_, { body }) => {
@@ -241,14 +276,14 @@ test('manual settlement retry repeats only a confirmed rolled-back operation wit
     return { data: requests.length === 1 ? { error: '事务已回滚', code: 'SETTLEMENT_RETRY', retry } : { gone: true } };
   } } });
   run(`session={code:'123456',playerId:'p'};g={matchId:'match'};room={revision:9};`);
-  await assert.rejects(run(`roomCommand('leave')`), /已回滚/);
+  await assert.rejects(run(`leaveRoom()`), /已回滚/);
   const button = w.document.querySelector('#retrySettlement');
   assert.equal(button.hidden, false);
   assert.match(button.textContent, /重试离房/);
   await run('retrySettlement()');
   await run('retrySettlement()');
   assert.equal(requests.length, 2);
-  assert.equal(requests[1].op, 'leave');
+  for (const req of requests) assert.deepEqual([req.op, req.matchId, req.playerId], ['leave','match','p']);
   assert.deepEqual(JSON.parse(JSON.stringify(requests[1].retry)), retry);
   assert.equal(run('session'), null);
   assert.equal(button.hidden, true);

@@ -115,6 +115,14 @@ test('v8 migration and concurrent game transactions', async (t) => {
   };
   await assert.rejects(call(ids[0], 'start', {}, failAt(/update public.rooms set options/)), /test rollback/);
   assert.equal((await db`select count(*) n from players where role is not null`)[0].n, '0');
+  const beforeLeave = await call(ids[2], 'snapshot');
+  const oldSeat = {playerId: beforeLeave.me.id, matchId: null, lobbyRevision: beforeLeave.revision};
+  assert.ok((await call(ids[2], 'leave', oldSeat)).gone);
+  const rejoined = await call(ids[2], 'join');
+  assert.notEqual(rejoined.playerId, oldSeat.playerId);
+  const revision = (await call(ids[2], 'snapshot')).revision;
+  await assert.rejects(call(ids[2], 'leave', {...oldSeat, lobbyRevision: revision}), /已变化/);
+  await assert.rejects(call(ids[2], 'leave', {...oldSeat, playerId: rejoined.playerId}), /已变化/);
   // A non-host owner may reserve a role; neither the host nor a spectator can read it.
   await db`update profiles set role='owner' where id=${ids[1]}`;
   const player = (await call(ids[0], 'snapshot')).me.id;
@@ -187,11 +195,12 @@ test('v8 migration and concurrent game transactions', async (t) => {
   view = await call(outsider, 'spectate');
   assert.equal(view.chat.length, 500);
   assert.equal(view.chat[0].payload.text, '6');
-  await call(wolves[0].account_id, 'leave');
+  const departure = wolves.map(w => ({playerId:w.id, matchId}));
+  await call(wolves[0].account_id, 'leave', departure[0]);
   assert.equal((await call(wolves[0].account_id, 'restore')).gone, true);
   assert.ok(!(await call(outsider, 'spectate')).options.g.aliveSeats.includes(wolves[0].seat));
   let retry;
-  await assert.rejects(call(wolves[1].account_id, 'leave', {}, failAt(/insert into public.replays/)), e => {
+  await assert.rejects(call(wolves[1].account_id, 'leave', departure[1], failAt(/insert into public.replays/)), e => {
     assert.ok(e instanceof SettlementError);
     assert.match(e.cause.message, /test rollback/);
     retry = e.retry;
@@ -199,10 +208,10 @@ test('v8 migration and concurrent game transactions', async (t) => {
   });
   assert.equal((await db`select count(*) n from ratings`)[0].n, '0');
   assert.equal((await db`select count(*) n from replays`)[0].n, '0');
-  await assert.rejects(call(wolves[1].account_id, 'leave', { retry: { ...retry, revision: retry.revision - 1 } }), /已推进/);
-  const leaves = await Promise.all([call(wolves[1].account_id, 'leave', { retry }), call(wolves[1].account_id, 'leave')]);
+  await assert.rejects(call(wolves[1].account_id, 'leave', { ...departure[1], retry: { ...retry, revision: retry.revision - 1 } }), /已推进/);
+  const leaves = await Promise.all([call(wolves[1].account_id, 'leave', { ...departure[1], retry }), call(wolves[1].account_id, 'leave', departure[1])]);
   assert.ok(leaves.every(result => result.gone));
-  assert.equal((await call(wolves[1].account_id, 'leave', { retry })).gone, true);
+  assert.equal((await call(wolves[1].account_id, 'leave', { ...departure[1], retry })).gone, true);
   view = await call(outsider, 'spectate');
   assert.equal(view.options.g.phase, 'finished');
   const [r] = await db`select * from replays where match_id=${matchId}`;
@@ -229,6 +238,15 @@ test('v8 migration and concurrent game transactions', async (t) => {
   const next = await call(rem[0].account_id, 'start');
   assert.notEqual(next.options.g.matchId, matchId);
   await assert.rejects(call(wolves[1].account_id, 'leave', { retry }), /已推进/);
+  const owner = await call(ids[1], 'snapshot');
+  const target = next.members.find(p => lobby.members.some(m => m.id === p.id) && p.id !== owner.me.id && p.id !== owner.hostId);
+  const kick = { id:target.id, playerId:owner.me.id };
+  await assert.rejects(call(ids[1], 'kick', {...kick, matchId}), /已变化/);
+  await assert.rejects(call(ids[1], 'kick', kick), /已变化/);
+  await assert.rejects(call(ids[1], 'kick', {...kick, matchId:null, lobbyRevision:lobby.revision}), /已变化/);
+  assert.deepEqual((await call(outsider, 'spectate')).options.g.aliveSeats, next.options.g.aliveSeats);
+  const kicked = await call(ids[1], 'kick', {...kick, matchId:next.options.g.matchId});
+  assert.ok(kicked.options.g.kicked.includes(target.seat));
   assert.equal(next.options.g.replayId, undefined);
   assert.ok(next.revision > lobby.revision);
 });

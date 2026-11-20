@@ -219,6 +219,7 @@ let phaseKey = '';
 let feedSeeded = false;
 let profile = null;
 let authBusy = false;
+let authEpoch = 0; // invalidate responses that started under a previous login
 let pendingTimer = null;
 let approvedRouted = false;
 let spectate = null;
@@ -468,18 +469,46 @@ function applyAccountUI() {
   els.pendingRefresh.hidden = profile.status !== 'pending';
 }
 
-function showAuthScreen() {
+function clearAuthViews() {
+  ++authEpoch;
   profile = null;
   approvedRouted = false;
   stopPendingPoll();
+  stopPolling();
+  polling = null;
+  clearSettlementRetry();
+  clearPreSpeech();
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith('wolf.prespeech:')) localStorage.removeItem(key);
+  }
+  session = room = myRow = g = pick = kickAsked = appointId = replayData = null;
+  members = []; localFeed = []; chatRows = []; wolfChatRows = []; wolfPicks = [];
+  submitted.clear(); ratings.clear(); ratingsKey = ''; phaseKey = '';
+  feedSeeded = roleShown = preFlushing = false;
+  resetRoomView();
+  els.chatInput.value = '';
+  els.roleCard.className = 'card'; els.myBar.className = ''; els.roleTag.className = 'badge';
+  els.roleExtra.hidden = els.roleExplode.hidden = true;
+  els.roleExplode.classList.remove('sr-explode-no');
+  els.revealBtn.textContent = '查看我的身份牌';
+  for (const el of [els.roleTag, els.roleName, els.roleCamp, els.roleSkill, els.roleExplode, els.roleExtra,
+    els.mySeat, els.chatTitle, els.chatNote, els.winnerText, els.resultNote, els.revealBody,
+    els.roomCodeLabel, els.activeRoomCode, els.spectateCode, els.spectatePrompt, els.spectateSeats,
+    els.spectateChat, els.spectateFeed, els.replayCode, els.replayWinner, els.replayMeta, els.replayPlayers,
+    els.replayTimeline, els.replayLog, els.adminBody]) el.replaceChildren();
+  clearTimeout(toastTimer);
+  els.toast.hidden = true; els.toast.textContent = '';
+  showHome(); // also invalidates the active spectator request
+}
+
+function showAuthScreen() {
+  clearAuthViews();
   applyAccountUI();
   openAuthModal();
 }
 
 function showAuthProblem(title, text) {
-  profile = null;
-  approvedRouted = false;
-  stopPendingPoll();
+  clearAuthViews();
   applyAccountUI();
   els.authForms.hidden = true;
   els.accountBar.hidden = false;
@@ -517,7 +546,9 @@ async function afterApproved() {
 }
 
 async function fetchProfileAndRoute(allowRepair = true) {
+  const epoch = authEpoch;
   const { data: userData, error: userError } = await client.auth.getUser();
+  if (epoch !== authEpoch) return false;
   if (userError) throw userError;
   if (!userData?.user) {
     showAuthScreen();
@@ -528,6 +559,7 @@ async function fetchProfileAndRoute(allowRepair = true) {
     .select('id, username, role, status')
     .eq('id', userData.user.id)
     .maybeSingle();
+  if (epoch !== authEpoch) return false;
   if (error) {
     showAuthProblem(
       '账号系统未就绪',
@@ -539,6 +571,7 @@ async function fetchProfileAndRoute(allowRepair = true) {
     const n = localStorage.getItem(NAME_KEY);
     if (allowRepair && n && NAME_RE.test(n)) {
       const repair = await client.rpc('repair_wolf_profile', { n });
+      if (epoch !== authEpoch) return false;
       if (!repair.error) return fetchProfileAndRoute(false);
     }
     showAuthProblem(
@@ -578,12 +611,13 @@ function startPendingPoll() {
 
 async function refreshProfileQuiet() {
   if (!profile || !client) return;
+  const epoch = authEpoch;
   const { data, error } = await client
     .from('profiles')
     .select('id, username, role, status')
     .eq('id', profile.id)
     .maybeSingle();
-  if (error || !data) return;
+  if (epoch !== authEpoch || !profile || error || !data) return;
   if (data.status === profile.status && data.role === profile.role) return;
   const wasApproved = accountApproved();
   profile = data;
@@ -850,17 +884,18 @@ function stopPolling() {
   }
 }
 
-let polling = false;
+let polling = null; // session owning the in-flight poll
 
 async function loadRatings() {
   if (!session || !members.length) return;
+  const active = session;
   const names = [...new Set(members.map((m) => m.name))];
   const key = names.slice().sort().join('|');
   const { data, error } = await client
     .from('ratings')
     .select('name, rating')
     .in('name', names);
-  if (!session) return;
+  if (session !== active) return;
   if (error) {
     ratings = new Map(names.map((name) => [name, 1500]));
     ratingsKey = key;
@@ -1063,7 +1098,9 @@ function showReplayView() {
 
 async function openReplay(id) {
   if (!guardClient()) return;
+  const epoch = authEpoch;
   const { data, error } = await client.from('replays').select('*').eq('id', id).maybeSingle();
+  if (epoch !== authEpoch || !accountApproved()) return;
   if (error) {
     toast(replayReadHint(error));
     return;
@@ -1603,6 +1640,7 @@ async function flushPreSpeech() {
   if (submitted.has(`${g.day}:speech`)) return;
   if (Date.now() - preFailedAt < 5000) return;
   preFlushing = true;
+  const active = session;
   const msgs = preSpeech.msgs.slice();
   preSpeech.msgs = [];
   savePreSpeech();
@@ -1610,6 +1648,7 @@ async function flushPreSpeech() {
   let failedIndex = -1;
   for (let i = 0; i < msgs.length; i += 1) {
     const ok = await act('chat',null,{text:msgs[i]});
+    if (active !== session) return;
     if (!ok) {
       failedIndex = i;
       break;

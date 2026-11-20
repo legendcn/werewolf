@@ -124,6 +124,12 @@ export async function dispatch(q, uid, cmd) {
       check(g && g.phase !== 'finished' && cmd.retry.matchId === g.matchId && cmd.retry.revision === Number(room.revision),
         '对局已推进，请按当前状态操作');
     }
+    if (op === 'leave' || op === 'kick') {
+      // Check the original membership and deal under the room lock, including first attempts.
+      // Waiting rooms have no match UUID; their revision also distinguishes successive lobbies.
+      check(cmd.playerId === me.id && cmd.matchId === (g?.matchId ?? null) &&
+        (g || cmd.lobbyRevision === Number(room.revision)), '房间或对局已变化，请刷新后重试');
+    }
     if (op === 'restore') return { code, playerId: me.id, name: me.name };
     await q('update public.players set last_seen=clock_timestamp() where id=$1', [me.id]);
     me.online = true;
