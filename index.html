@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.17.0">
+  <link rel="stylesheet" href="styles.css?v=1.1.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -19,6 +19,7 @@
       </ul>
       <div class="sr-account">
         <button id="accountBtn" class="btn btn-sm btn-outline-dark" type="button">登录 / 注册</button>
+        <button id="pendingBadge" class="sr-pending-badge" type="button" hidden title="有待审核玩家，点击处理">0</button>
         <div id="accountMenu" class="sr-account-menu" hidden>
           <div class="sr-account-head">
             <strong id="accountTopName">未登录</strong>
@@ -190,7 +191,7 @@
 
       <div class="card mb-4" id="adminCard" hidden>
         <div class="card-header d-flex justify-content-between align-items-center">
-          <strong>账号管理</strong>
+          <strong>账号管理<span id="adminPendingBadge" class="badge badge-danger ml-2" hidden>0 待审核</span></strong>
           <div><select id="adminFilter" aria-label="账号筛选"><option value="pending">待审核</option><option value="all">全部账号</option></select>
             <button id="adminPrev" type="button" disabled>上一页</button><span id="adminPage"></span><button id="adminNext" type="button" disabled>下一页</button></div>
           <button id="adminRefresh" class="btn btn-sm btn-outline-secondary" type="button">刷新</button>
@@ -410,7 +411,7 @@
   </main>
 
   <footer class="sr-footer container">
-    v1.0.0 · 百科校准规则与角色技能 / 八板子玩法 / 首日先竞选后公布死讯 / 首夜遗言 / 白天先遗言后开枪 / 警上自爆打断竞选 / 站长钦定身份 / 警长竞选 / 警徽移交 / 选人高亮 / 60 秒行动与局时 / 猎人可选翻牌 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 旁观 / 历史回放 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v1.1.0 · 待审核玩家提醒（站长/管理员）/ 百科校准规则与角色技能 / 八板子玩法 / 首日先竞选后公布死讯 / 首夜遗言 / 白天先遗言后开枪 / 警上自爆打断竞选 / 站长钦定身份 / 警长竞选 / 警徽移交 / 选人高亮 / 60 秒行动与局时 / 猎人可选翻牌 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 旁观 / 历史回放 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="authModal" class="sr-modal" hidden>
@@ -478,10 +479,10 @@
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=1.0.0"></script>
-  <script src="supabase/functions/_shared/modes.js?v=1.0.0"></script>
-  <script src="supabase/functions/_shared/rules.js?v=1.0.0"></script>
-  <script src="js/room-api.js?v=1.0.0"></script>
-  <script src="js/app.js?v=1.0.0"></script>
+  <script src="js/config.js?v=1.1.0"></script>
+  <script src="supabase/functions/_shared/modes.js?v=1.1.0"></script>
+  <script src="supabase/functions/_shared/rules.js?v=1.1.0"></script>
+  <script src="js/room-api.js?v=1.1.0"></script>
+  <script src="js/app.js?v=1.1.0"></script>
 </body>
 </html>

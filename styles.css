@@ -431,6 +431,36 @@ body {
 .sr-account-head { margin-bottom: 8px; }
 .sr-account-menu .btn + .btn { margin-top: 6px; }
 
+.sr-pending-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 1041;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #dc3545;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(220, 53, 69, 0.5);
+  animation: sr-pending-pulse 1.8s ease-in-out infinite;
+}
+.sr-pending-badge[hidden] { display: none; }
+.sr-pending-badge:hover { background: #c82333; }
+@keyframes sr-pending-pulse {
+  0%, 100% { box-shadow: 0 2px 6px rgba(220, 53, 69, 0.5); }
+  50% { box-shadow: 0 2px 12px rgba(220, 53, 69, 0.9); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sr-pending-badge { animation: none; }
+}
+
 /* ---------- 登录弹层 ---------- */
 .sr-modal {
   position: fixed;

@@ -74,6 +74,8 @@ const els = {
   accountTopNote: document.querySelector('#accountTopNote'),
   accountRefreshBtn: document.querySelector('#accountRefreshBtn'),
   accountAdminBtn: document.querySelector('#accountAdminBtn'),
+  pendingBadge: document.querySelector('#pendingBadge'),
+  adminPendingBadge: document.querySelector('#adminPendingBadge'),
   accountLogoutBtn: document.querySelector('#accountLogoutBtn'),
   authForms: document.querySelector('#authForms'),
   loginForm: document.querySelector('#loginForm'),
@@ -223,6 +225,9 @@ let authEpoch = 0; // invalidate responses that started under a previous login
 let authUserId = null; // SDK principal, even while the profile is still loading
 let profileRead = null;
 let pendingTimer = null;
+let pendingWatchTimer = null;
+let pendingCount = 0;
+let lastPendingCount = -1;
 let approvedRouted = false;
 let spectate = null;
 let spectateTimer = null;
@@ -415,6 +420,8 @@ function applyAccountUI() {
   els.leaderboardCard.hidden = !approved;
   els.historyCard.hidden = !approved;
   els.adminCard.hidden = !(approved && isAdminAccount());
+  if (approved && isAdminAccount()) startPendingWatch();
+  else stopPendingWatch();
   els.createBtn.disabled = busy || !approved;
   els.joinBtn.disabled = busy || !approved;
 
@@ -476,6 +483,7 @@ function clearAuthViews() {
   profile = null;
   approvedRouted = false;
   stopPendingPoll();
+  stopPendingWatch();
   clearRoomViews();
   for (const key of Object.keys(localStorage)) {
     if (key.startsWith('wolf.prespeech:')) localStorage.removeItem(key);
@@ -629,6 +637,47 @@ function startPendingPoll() {
   }, 15000);
 }
 
+function renderPendingBadge(n) {
+  const show = n > 0 && isAdminAccount();
+  els.pendingBadge.hidden = !show;
+  els.pendingBadge.textContent = n > 99 ? '99+' : String(n);
+  els.pendingBadge.title = `有 ${n} 名玩家待审核，点击处理`;
+  els.adminPendingBadge.hidden = !show;
+  els.adminPendingBadge.textContent = `${n} 待审核`;
+  els.accountAdminBtn.textContent = show ? `账号管理（${n} 待审核）` : '账号管理';
+}
+
+async function checkPending() {
+  if (!client || !isAdminAccount()) return;
+  const { count, error } = await client
+    .from('profiles')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'pending');
+  if (error || !isAdminAccount()) return;
+  const n = count || 0;
+  const increased = lastPendingCount >= 0 && n > lastPendingCount;
+  pendingCount = n;
+  lastPendingCount = n;
+  renderPendingBadge(n);
+  if (increased) toast(`有 ${n} 名玩家待审核，点右上角红标处理`);
+}
+
+function startPendingWatch() {
+  if (pendingWatchTimer || !isAdminAccount()) return;
+  checkPending().catch(() => {});
+  pendingWatchTimer = setInterval(() => checkPending().catch(() => {}), 30000);
+}
+
+function stopPendingWatch() {
+  if (pendingWatchTimer) {
+    clearInterval(pendingWatchTimer);
+    pendingWatchTimer = null;
+  }
+  pendingCount = 0;
+  lastPendingCount = -1;
+  renderPendingBadge(0);
+}
+
 async function refreshProfileQuiet() {
   if (!profile || !client) return;
   const epoch = authEpoch;
@@ -769,6 +818,7 @@ async function adminUpdate(id, patch, message) {
   }
   toast(message);
   await loadAdmin();
+  checkPending().catch(() => {});
 }
 
 function randomCode() {
@@ -3030,7 +3080,25 @@ els.accountBtn.addEventListener('click', () => {
 els.accountAdminBtn.addEventListener('click', () => {
   closeAccountMenu();
   if (session) showHome();
-  if (isAdminAccount()) loadAdmin();
+  if (isAdminAccount()) {
+    if (pendingCount > 0) {
+      document.querySelector('#adminFilter').value = 'pending';
+      adminPage = 0;
+    }
+    loadAdmin();
+    checkPending().catch(() => {});
+  }
+  els.adminCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+els.pendingBadge.addEventListener('click', () => {
+  closeAccountMenu();
+  if (session) showHome();
+  if (isAdminAccount()) {
+    document.querySelector('#adminFilter').value = 'pending';
+    adminPage = 0;
+    loadAdmin();
+  }
   els.adminCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
