@@ -1698,7 +1698,7 @@ function spectatePromptText(state) {
     return `${order.length > 1 ? `发言顺序：${order.map(pad).join(' → ')}。` : ''}当前 ${pad(speaker)} 号发言（第 ${state.speechIndex + 1} / ${order.length} 位）。`;
   }
   if (state.phase === 'vote' || state.phase === 'runoff') return '投票中，结果在本轮结束后公布。';
-  if (state.phase === 'hunter') return '猎人正在选择开枪目标…';
+  if (state.phase === 'hunter') return '正在结算…';
   if (state.phase === 'dawn') return '天亮了，等待公布昨夜结果…';
   return '';
 }
@@ -1773,6 +1773,12 @@ function renderSpectateSeats(state, mode) {
         out.textContent = '出局';
         marks.append(out);
       }
+      if ((state.afk || []).includes(seat)) {
+        const afk = document.createElement('span');
+        afk.className = 'badge badge-warning';
+        afk.textContent = '挂机';
+        marks.append(afk);
+      }
     }
     li.append(head, avatar, name, marks);
     frag.append(li);
@@ -1825,7 +1831,9 @@ function updateSpectateClock() {
     return;
   }
   const left = Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
-  els.spectateClock.textContent = `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+  els.spectateClock.textContent = left > 0
+    ? `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`
+    : '加时';
 }
 
 async function loadMyRole() {
@@ -2146,7 +2154,7 @@ function phaseTextOf(state) {
   if (state.phase === 'dawn') return `第 ${state.day} 天 · 天亮了`;
   if (state.phase === 'vote') return `第 ${state.day} 天 · 投票`;
   if (state.phase === 'runoff') return `第 ${state.day} 天 · PK 投票`;
-  if (state.phase === 'hunter') return '猎人开枪';
+  if (state.phase === 'hunter') return '出局结算';
   return `第 ${state.day} 天 · 讨论`;
 }
 
@@ -2193,7 +2201,7 @@ function renderStatusPrompt(mode, inGame) {
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.statusPrompt.textContent = '投票：点击座位选择目标，不能投自己，也可以弃权。';
   } else if (g.phase === 'hunter') {
-    els.statusPrompt.textContent = '猎人正在选择开枪目标…';
+    els.statusPrompt.textContent = '正在结算…';
   } else if (g.phase === 'dawn') {
     els.statusPrompt.textContent = '天亮了，等待公布昨夜结果…';
   }
@@ -2205,7 +2213,9 @@ function updateClock() {
     return;
   }
   const left = Math.max(0, Math.ceil((g.deadline - Date.now()) / 1000));
-  els.gameClock.textContent = `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+  els.gameClock.textContent = left > 0
+    ? `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`
+    : '加时';
 }
 
 setInterval(() => {
@@ -2302,6 +2312,12 @@ function renderSeats(mode, inGame) {
         off.textContent = '离线';
         marks.append(off);
         li.classList.add('sr-offline');
+      }
+      if (inGame && isAfk(seat)) {
+        const afk = document.createElement('span');
+        afk.className = 'badge badge-warning';
+        afk.textContent = '挂机';
+        marks.append(afk);
       }
     }
 
@@ -2443,6 +2459,10 @@ function renderActionPanel(mode, inGame) {
     renderHunterPanel(seat);
     return;
   }
+  if (isAfk(seat)) {
+    els.actionArea.append(note('你已挂机：本局 60 秒局时已经用完，系统不会再多等你。'));
+    els.actionArea.append(makeBtn('我回来了', 'btn-warning', () => act('afk', null, { back: true })));
+  }
   if (!alive) {
     els.actionArea.append(note('你已出局，可以旁观；死者不能在白天发言或投票。'));
     return;
@@ -2455,7 +2475,7 @@ function renderActionPanel(mode, inGame) {
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     renderVotePanel(seat, role);
   } else if (g.phase === 'hunter') {
-    els.actionArea.append(note('等待猎人开枪…'));
+    els.actionArea.append(note('等待结算…'));
   } else if (g.phase === 'dawn') {
     els.actionArea.append(note('天亮了，等待公布昨夜结果…'));
   }
@@ -2671,15 +2691,28 @@ function renderVotePanel(seat, role) {
 
 function renderHunterPanel(seat) {
   if (submittedHelp('hunter')) {
-    els.actionArea.append(note('已选择开枪目标，等待结算…'));
+    els.actionArea.append(note('已选择，等待结算…'));
     return;
   }
-  if (!pick || pick.kind !== 'hunter') {
-    beginPick('hunter', g.aliveSeats, 1, (sel) => act('hunter', sel[0]));
+  if (pick && pick.kind === 'hunter') {
+    els.actionArea.append(note('已翻牌：点击要带走的玩家再确认；也可以翻牌但不开枪。'));
+    els.actionArea.append(pickButtons((sel) => act('hunter', sel[0], { reveal: true })));
+    els.actionArea.append(makeBtn('翻牌但不开枪', 'btn-outline-secondary', () => {
+      pick = null;
+      act('hunter', null, { reveal: true });
+    }));
+    els.actionArea.append(makeBtn('返回', 'btn-outline-secondary', () => {
+      pick = null;
+      renderRoom();
+    }));
+    return;
   }
-  els.actionArea.append(note('你已出局，但可以开枪带走一名玩家（也可以不开枪）。'));
-  els.actionArea.append(pickButtons((sel) => act('hunter', sel[0])));
-  els.actionArea.append(makeBtn('不开枪', 'btn-outline-secondary', () => act('hunter', null)));
+  els.actionArea.append(note('你已出局。翻牌会公开你的猎人身份并可以带走一人；不翻牌则身份保密、不开枪。'));
+  els.actionArea.append(makeBtn('翻牌（可以开枪）', 'btn-danger', () => {
+    beginPick('hunter', g.aliveSeats.slice(), 1, (sel) => act('hunter', sel[0], { reveal: true }));
+    renderRoom();
+  }));
+  els.actionArea.append(makeBtn('不翻牌（不开枪）', 'btn-outline-secondary', () => act('hunter', null, { reveal: false })));
 }
 
 function renderMyBar() {
@@ -2917,7 +2950,7 @@ function updateChatForm() {
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.chatNote.textContent = '投票中不能发言';
   } else if (g.phase === 'hunter') {
-    els.chatNote.textContent = '猎人正在开枪';
+    els.chatNote.textContent = '等待结算';
   } else {
     els.chatNote.textContent = '天亮了，等待公布结果';
   }
@@ -2996,6 +3029,9 @@ async function startGame() {
       speechIndex: 0,
       deaths: [],
       kicked: [],
+      bank: {},
+      afk: [],
+      bankMark: {},
       log: [{ day: 1, kind: 'system', text: `板子：${mode.name}，共 ${total} 人` }],
       winner: null,
       winReason: '',
@@ -3098,6 +3134,101 @@ function allActed(step, actions) {
   return expected.every((seat) => acted.has(seat) || !isSeatOnline(seat));
 }
 
+// ---------- 局时：每个回合 60 秒用完后，按剩余局时继续等，迟到时间从局时里扣 ----------
+
+function ensureBank() {
+  if (!g) return;
+  if (!g.bank) g.bank = {};
+  if (!g.afk) g.afk = [];
+  if (!g.bankMark) g.bankMark = {};
+  hostRoles.forEach((row) => {
+    if (typeof g.bank[row.seat] !== 'number') g.bank[row.seat] = 60000;
+  });
+}
+
+function isAfk(seat) {
+  return Boolean(g?.afk && g.afk.includes(seat));
+}
+
+function bankOf(seat) {
+  return (g?.bank && typeof g.bank[seat] === 'number') ? g.bank[seat] : 0;
+}
+
+function markAfk(seat) {
+  if (!g || isAfk(seat)) return;
+  g.afk.push(seat);
+  const row = rowBySeat(seat);
+  g.log.push({
+    day: g.day,
+    kind: 'warning',
+    text: `${pad(seat)} 号${row?.name ? `（${row.name}）` : ''}60 秒局时用完，进入挂机状态`,
+  });
+}
+
+// 截止后才提交的玩家：把迟到的秒数从局时里扣掉（每个回合只扣一次）
+function bankCharge(key, seats, actions) {
+  if (!g?.bank || !g.deadline) return false;
+  const now = Date.now();
+  if (now <= g.deadline) return false;
+  const acted = new Set(actions.map((a) => a.seat));
+  let changed = false;
+  seats.forEach((seat) => {
+    if (!acted.has(seat) || isBotSeat(seat)) return;
+    const mark = `${key}:${seat}`;
+    if (g.bankMark[mark]) return;
+    g.bankMark[mark] = 1;
+    const used = Math.min(bankOf(seat), now - g.deadline);
+    g.bank[seat] = Math.max(0, bankOf(seat) - used);
+    changed = true;
+    if (g.bank[seat] <= 0) markAfk(seat);
+  });
+  return changed;
+}
+
+// 截止后还在等的人：局时耗尽的立刻挂机
+function bankTick(key, seats, actions) {
+  if (!g?.bank || !g.deadline) return false;
+  const now = Date.now();
+  if (now <= g.deadline) return false;
+  const acted = new Set(actions.map((a) => a.seat));
+  let changed = false;
+  seats.forEach((seat) => {
+    if (acted.has(seat) || isBotSeat(seat) || !isSeatOnline(seat) || isAfk(seat)) return;
+    const bank = bankOf(seat);
+    if (bank > 0 && now - g.deadline >= bank) {
+      g.bank[seat] = 0;
+      markAfk(seat);
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+// 还要额外等多久（取最长的剩余局时）
+function bankExtra(seats, actions) {
+  if (!g?.bank || !g.deadline) return 0;
+  const acted = new Set(actions.map((a) => a.seat));
+  let extra = 0;
+  seats.forEach((seat) => {
+    if (acted.has(seat) || isBotSeat(seat) || !isSeatOnline(seat) || isAfk(seat)) return;
+    extra = Math.max(extra, bankOf(seat));
+  });
+  return extra;
+}
+
+async function processAfkBack() {
+  if (!g || !g.afk || !g.afk.length) return;
+  const rows = await fetchActions(g.day, 'afk');
+  const backs = rows.filter((row) => row.payload?.back && g.afk.includes(row.seat));
+  if (!backs.length) return;
+  backs.forEach((row) => {
+    g.afk = g.afk.filter((s) => s !== row.seat);
+    g.log.push({ day: g.day, kind: 'system', text: `${pad(row.seat)} 号回来了，解除挂机` });
+  });
+  await saveGame();
+  renderRoom();
+}
+
 async function fetchHostActions(day, step) {
   const rows = await fetchActions(day, step);
   if (step !== 'explode' && (g.phase === 'day' || g.phase === 'vote' || g.phase === 'runoff')) {
@@ -3112,15 +3243,23 @@ async function hostTick() {
   hostBusy = true;
   try {
     if (!hostRoles.length) await loadHostRoles();
+    ensureBank();
+    await processAfkBack();
     if (await processKickRequest()) return;
     let actions = await fetchHostActions(g.day, g.step || 'day');
     const now = Date.now();
     if (g.phase === 'night') {
       if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
-      if (allActed(g.step, actions) || now >= g.deadline) {
+      const seats = expectedSeats(g.step);
+      const key = `n${g.day}:${g.step}`;
+      const changed = bankCharge(key, seats, actions) || bankTick(key, seats, actions);
+      const extra = bankExtra(seats, actions);
+      if (allActed(g.step, actions) || now >= g.deadline + extra) {
         // 超时结算前再取一次，避免女巫/预言家在最后一刻提交的动作被漏掉
         const finalActions = now >= g.deadline ? await fetchActions(g.day, g.step) : actions;
         await resolveNightStep(finalActions);
+      } else if (changed) {
+        await saveGame();
       }
     } else if (g.phase === 'dawn') {
       if (now >= g.deadline) await startDay();
@@ -3150,7 +3289,12 @@ async function hostTick() {
       const ended = speechActions.some(
         (row) => row.seat === speaker && Number(row.payload?.turn) === g.speechIndex
       );
-      if (ended || now >= g.deadline) await advanceSpeech();
+      const seats = [speaker];
+      const key = `s${g.day}:${g.speechIndex}`;
+      const changed = bankCharge(key, seats, speechActions) || bankTick(key, seats, speechActions);
+      const extra = bankExtra(seats, speechActions);
+      if (ended || now >= g.deadline + extra) await advanceSpeech();
+      else if (changed) await saveGame();
     } else if (g.phase === 'vote' || g.phase === 'runoff') {
       if (await fillBotActions(g.step, actions)) actions = await fetchHostActions(g.day, g.step);
       const boom = findExplodeAction(actions);
@@ -3158,10 +3302,20 @@ async function hostTick() {
         await resolveExplode(boom);
         return;
       }
-      if (allActed(g.step, actions) || now >= g.deadline) await resolveVote(actions);
+      const seats = expectedSeats(g.step);
+      const key = `v${g.day}:${g.step}`;
+      const changed = bankCharge(key, seats, actions) || bankTick(key, seats, actions);
+      const extra = bankExtra(seats, actions);
+      if (allActed(g.step, actions) || now >= g.deadline + extra) await resolveVote(actions);
+      else if (changed) await saveGame();
     } else if (g.phase === 'hunter') {
       if (await fillBotActions('hunter', actions)) actions = await fetchActions(g.day, 'hunter');
-      if (allActed('hunter', actions) || now >= g.deadline) await resolveHunter(actions);
+      const seats = expectedSeats('hunter');
+      const key = `h${g.day}`;
+      const changed = bankCharge(key, seats, actions) || bankTick(key, seats, actions);
+      const extra = bankExtra(seats, actions);
+      if (allActed('hunter', actions) || now >= g.deadline + extra) await resolveHunter(actions);
+      else if (changed) await saveGame();
     }
   } catch (error) {
     toast(`判定出错：${friendlyError(error)}`);
@@ -3261,10 +3415,12 @@ function botVoteChoice(step, seat) {
 
 function botHunterChoice(seat) {
   if (Math.random() < 0.6) {
-    const target = randomOf(g.aliveSeats.filter((s) => s !== seat));
-    if (target != null) return { target, payload: {} };
+    const target = Math.random() < 0.6
+      ? randomOf(g.aliveSeats.filter((s) => s !== seat))
+      : null;
+    return { target, payload: { reveal: true } };
   }
-  return { target: null, payload: {} };
+  return { target: null, payload: { reveal: false } };
 }
 
 async function fillBotActions(step, actions) {
@@ -3434,7 +3590,6 @@ async function applyDeaths(deaths, when) {
     g.phase = 'hunter';
     g.step = 'hunter';
     g.deadline = Date.now() + DUR.hunter;
-    g.log.push({ day: g.day, kind: 'warning', text: `${pad(hunterDeath.seat)} 号翻牌猎人，请选择开枪目标` });
     await saveGame();
     renderRoom();
     return 'hunter';
@@ -3854,13 +4009,16 @@ async function resolveVote(actions) {
 async function resolveHunter(actions) {
   const seat = g.hunterPending;
   const row = actions.find((a) => a.seat === seat);
-  const target = row?.target != null ? Number(row.target) : null;
+  const payload = row?.payload || {};
+  // 没提交/超时默认不翻牌；旧客户端没带 reveal 字段时按“选了目标即翻牌”兼容
+  const reveal = payload.reveal === true || (payload.reveal === undefined && row?.target != null);
+  const target = reveal && row?.target != null ? Number(row.target) : null;
   const from = g.hunterFrom || 'night';
   g.hunterPending = null;
   g.hunterFrom = null;
 
-  if (target && isAliveSeat(target)) {
-    g.log.push({ day: g.day, kind: 'death', text: `${pad(seat)} 号猎人开枪带走 ${pad(target)} 号` });
+  if (reveal && target && isAliveSeat(target)) {
+    g.log.push({ day: g.day, kind: 'death', text: `${pad(seat)} 号翻开猎人牌，开枪带走 ${pad(target)} 号` });
     const deaths = Rules.expandDeaths([{ seat: target, reason: 'hunter' }], {
       alive: aliveSet(),
       lovers: g.lovers,
@@ -3869,8 +4027,8 @@ async function resolveHunter(actions) {
     });
     const outcome = await applyDeaths(deaths, 'day');
     if (outcome !== 'continue') return;
-  } else {
-    g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号猎人没有开枪` });
+  } else if (reveal) {
+    g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号翻开猎人牌，没有开枪` });
     const win = checkWin();
     if (win) {
       await finishGame(win.winner, win.reason);
