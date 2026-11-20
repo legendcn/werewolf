@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.9.0">
+  <link rel="stylesheet" href="styles.css?v=0.10.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -139,7 +139,8 @@
               <ol class="pl-3 mb-0">
                 <li>登录后选板子、点「创建房间」，把 6 位房间码发给朋友；每种板子人数固定，<strong>满员后房主开牌</strong>。昵称就是账号名，注册后不可改，评分也记在账号名上。</li>
                 <li>夜晚按顺序行动：盗贼换牌 → 丘比特连情侣 → 守卫守护 → 狼人刀人 → 狼美人魅惑 → 女巫用药 → 预言家查验；<strong>狼人夜里可在「狼人频道」私聊</strong>。</li>
-                <li>天亮公布出局玩家（不翻身份），存活玩家按<strong>固定顺序</strong>每人 20 秒发言，全部说完后同时投票；平票进入 PK，再平票则无人出局。</li>
+                <li>天亮公布出局玩家（不翻身份），存活玩家按<strong>固定顺序</strong>每人 60 秒发言（还没轮到你也能提前打字，轮到你时自动发出），全部说完后同时投票；平票进入 PK，再平票则无人出局。</li>
+                <li><strong>自爆</strong>：普通狼人和白狼王在白天（含投票阶段）可以自爆，翻牌立即出局并跳过当天剩余流程、直接天黑；白狼王自爆还可以带走一人；<strong>狼美人不能自爆</strong>。</li>
                 <li>胜负按<strong>屠边</strong>：好人放逐所有狼人获胜；狼人杀光全部神职或全部平民获胜；人狼情侣组成第三方，需活到最后。</li>
                 <li><strong>评分</strong>：团队 Elo，初始 1500，按对手平均分计算期望胜率，同队同输赢，零和结算；6 / 9 / 12 人局 K 值分别为 32 / 28 / 24。</li>
               </ol>
@@ -237,6 +238,7 @@
           <div class="d-flex flex-wrap align-items-center mb-2">
             <span id="roleTag" class="sr-tag">身份</span>
             <strong id="roleName" class="h5 mb-0 ml-2">—</strong>
+            <span id="roleExplode" class="sr-explode-badge ml-2" hidden></span>
             <span id="roleCamp" class="text-muted small ml-auto">—</span>
           </div>
           <p id="roleSkill" class="mb-0">—</p>
@@ -308,15 +310,15 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.9.0 · 账号登录 / 站长审核 / 边玩边审核 / 狼人夜聊 / 顺序发言 / 掉线自动跳过 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.10.0 · 60 秒发言 / 提前打字 / 狼人自爆 / 女巫 60 秒用药 / 账号登录 / 边玩边审核 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.9.0"></script>
-  <script src="js/modes.js?v=0.9.0"></script>
-  <script src="js/rules.js?v=0.9.0"></script>
-  <script src="js/app.js?v=0.9.0"></script>
+  <script src="js/config.js?v=0.10.0"></script>
+  <script src="js/modes.js?v=0.10.0"></script>
+  <script src="js/rules.js?v=0.10.0"></script>
+  <script src="js/app.js?v=0.10.0"></script>
 </body>
 </html>

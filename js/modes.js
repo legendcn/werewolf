@@ -2,15 +2,18 @@
   const ROLES = {
     werewolf: {
       name: '狼人', camp: 'killer', campName: '狼人阵营',
-      skill: '每晚与狼同伴共同刀掉一名玩家；白天要隐藏身份，靠发言误导好人。',
+      skill: '每晚与狼同伴共同刀掉一名玩家；白天可以自爆：翻牌出局，当天剩余流程全部跳过，立即进入黑夜。',
+      explode: '可以',
     },
     wolfking: {
       name: '白狼王', camp: 'killer', campName: '狼人阵营',
-      skill: '狼人阵营。白天可自爆并带走一名玩家，立即进入黑夜。',
+      skill: '狼人阵营。白天可自爆，并可以带走一名玩家，立即进入黑夜。',
+      explode: '可以（可带一人）',
     },
     wolfbeauty: {
       name: '狼美人', camp: 'killer', campName: '狼人阵营',
-      skill: '每晚参与袭击后可魅惑一名玩家；你出局时被魅惑者殉情（被骑士决斗除外）。不能连续两晚魅惑同一人。',
+      skill: '每晚参与袭击后可魅惑一名玩家；你出局时被魅惑者殉情（被骑士决斗除外）。不能连续两晚魅惑同一人。本角色不能自爆。',
+      explode: '不可以',
     },
     seer: {
       name: '预言家', camp: 'police', campName: '好人阵营 · 神职',

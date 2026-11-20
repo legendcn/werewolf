@@ -4,18 +4,18 @@ const { ROLES, MODES, CAMPS, modeById } = window.WOLF_MODES;
 const Rules = window.WolfRules;
 
 const DUR = {
-  thief: 20000,
-  cupid: 20000,
-  guard: 20000,
-  wolves: 30000,
-  wolfbeauty: 15000,
-  witch: 20000,
-  seer: 20000,
+  thief: 30000,
+  cupid: 30000,
+  guard: 35000,
+  wolves: 45000,
+  wolfbeauty: 25000,
+  witch: 60000,
+  seer: 40000,
   dawn: 6000,
-  speech: 20000,
-  vote: 30000,
-  runoff: 25000,
-  hunter: 20000,
+  speech: 60000,
+  vote: 45000,
+  runoff: 35000,
+  hunter: 30000,
 };
 
 const STEP_LABEL = {
@@ -42,6 +42,7 @@ const REASON_LABEL = {
   lover: '（殉情）',
   charm: '（被狼美人带走）',
   explode: '（被白狼王自爆带走）',
+  selfboom: '（自爆出局）',
 };
 
 const DEATH_SHORT = {
@@ -53,6 +54,7 @@ const DEATH_SHORT = {
   lover: '殉情',
   charm: '被狼美人带走',
   explode: '自爆带走',
+  selfboom: '自爆出局',
 };
 
 const els = {
@@ -116,6 +118,7 @@ const els = {
   roleName: document.querySelector('#roleName'),
   roleCamp: document.querySelector('#roleCamp'),
   roleSkill: document.querySelector('#roleSkill'),
+  roleExplode: document.querySelector('#roleExplode'),
   roleExtra: document.querySelector('#roleExtra'),
   playerList: document.querySelector('#playerList'),
   actionArea: document.querySelector('#actionArea'),
@@ -172,6 +175,9 @@ let ratingsKey = '';
 let leaderboardData = [];
 let submitted = new Set();
 let pick = null;
+let preSpeech = { day: 0, msgs: [] };
+let preFlushing = false;
+let preFailedAt = 0;
 let phaseKey = '';
 let feedSeeded = false;
 let profile = null;
@@ -745,6 +751,9 @@ function enterRoom(nextSession) {
   ratingsKey = '';
   submitted = new Set();
   pick = null;
+  preFlushing = false;
+  preFailedAt = 0;
+  loadPreSpeech();
   phaseKey = '';
   feedSeeded = false;
   resetRoomView();
@@ -1193,6 +1202,120 @@ function renderFeed() {
   if (stick) els.feed.scrollTop = els.feed.scrollHeight;
 }
 
+function preSpeechKey() {
+  return session ? `wolf.prespeech:${session.code}:${session.playerId}` : null;
+}
+
+function loadPreSpeech() {
+  preSpeech = { day: 0, msgs: [] };
+  const key = preSpeechKey();
+  if (!key) return;
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!raw || !Array.isArray(raw.msgs)) return;
+    preSpeech = {
+      day: Number(raw.day) || 0,
+      msgs: raw.msgs.filter((text) => typeof text === 'string' && text.trim()).slice(0, 12),
+    };
+  } catch {
+    preSpeech = { day: 0, msgs: [] };
+  }
+}
+
+function savePreSpeech() {
+  const key = preSpeechKey();
+  if (!key) return;
+  if (!preSpeech.msgs.length) {
+    localStorage.removeItem(key);
+    return;
+  }
+  localStorage.setItem(key, JSON.stringify(preSpeech));
+}
+
+function clearPreSpeech() {
+  preSpeech = { day: 0, msgs: [] };
+  savePreSpeech();
+}
+
+function pendingSpeechCount() {
+  return g && preSpeech.day === g.day ? preSpeech.msgs.length : 0;
+}
+
+function canPreInput() {
+  if (!g || g.phase !== 'day' || !isAliveSeat(myRow?.seat)) return false;
+  const order = g.speechOrder || [];
+  const myIndex = order.indexOf(myRow?.seat);
+  if (myIndex < 0) return false;
+  return myIndex > g.speechIndex;
+}
+
+function queueSpeech(text) {
+  if (!g) return;
+  if (preSpeech.day !== g.day) preSpeech = { day: g.day, msgs: [] };
+  if (preSpeech.msgs.length >= 12) {
+    toast('先存了 12 条，等轮到你时再接着发');
+    return;
+  }
+  preSpeech.msgs.push(text);
+  savePreSpeech();
+  renderChat();
+  updateChatForm();
+  toast(`已排第 ${preSpeech.msgs.length} 条，轮到你时会自动发出`);
+}
+
+async function sendChatMessage(text, preinput) {
+  if (!session || !g) return false;
+  const name = profile?.username || session.name || '';
+  const { error } = await client
+    .from('game_actions')
+    .insert({
+      room_code: session.code,
+      day: g.day,
+      step: 'chat',
+      player_id: session.playerId,
+      target_seat: null,
+      payload: { name, text, preinput: Boolean(preinput) },
+    });
+  if (error) {
+    toast(friendlyError(error));
+    return false;
+  }
+  return true;
+}
+
+async function flushPreSpeech() {
+  if (preFlushing || !g || g.phase !== 'day') return;
+  if (!preSpeech.msgs.length || preSpeech.day !== g.day) return;
+  if (currentSpeaker() !== myRow?.seat) return;
+  if (submitted.has(`${g.day}:speech`)) return;
+  if (Date.now() - preFailedAt < 5000) return;
+  preFlushing = true;
+  const msgs = preSpeech.msgs.slice();
+  preSpeech.msgs = [];
+  savePreSpeech();
+  renderChat();
+  let failedIndex = -1;
+  for (let i = 0; i < msgs.length; i += 1) {
+    const ok = await sendChatMessage(msgs[i], true);
+    if (!ok) {
+      failedIndex = i;
+      break;
+    }
+  }
+  if (failedIndex >= 0) {
+    preFailedAt = Date.now();
+    preSpeech.msgs = msgs.slice(failedIndex).concat(preSpeech.msgs);
+    savePreSpeech();
+  }
+  preFlushing = false;
+  renderChat();
+  updateChatForm();
+  if (failedIndex < 0) {
+    setTimeout(loadChat, 300);
+    if (isHost()) setTimeout(hostTick, 250);
+  }
+}
+
 function renderChat() {
   const rows = g?.phase === 'night' ? wolfChatRows : chatRows;
   const frag = document.createDocumentFragment();
@@ -1208,6 +1331,20 @@ function renderChat() {
     wrap.append(who, text);
     frag.append(wrap);
   });
+  if (g?.phase === 'day' && pendingSpeechCount()) {
+    preSpeech.msgs.forEach((pending) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'sr-chat-msg sr-chat-pending';
+      const who = document.createElement('span');
+      who.className = 'sr-chat-who';
+      who.textContent = '我（待发出）';
+      const text = document.createElement('span');
+      text.className = 'sr-chat-text';
+      text.textContent = pending;
+      wrap.append(who, text);
+      frag.append(wrap);
+    });
+  }
   els.chatFeed.replaceChildren(frag);
   els.chatFeed.scrollTop = els.chatFeed.scrollHeight;
 }
@@ -1284,7 +1421,17 @@ function renderStatusPrompt(mode, inGame) {
       const position = `第 ${g.speechIndex + 1} / ${order.length} 位`;
       const list = order.map(pad).join(' → ');
       const offline = isSeatOnline(speaker) ? '' : '，对方离线，将自动跳过';
-      els.statusPrompt.textContent = `${order.length > 1 ? `发言顺序：${list}。` : ''}当前 ${pad(speaker)} 号（${position}）${speaker === myRow?.seat ? '，轮到你发言，可连发多条，说完点「结束发言」' : `，等待发言${offline}`}。`;
+      let hint;
+      if (speaker === myRow?.seat) {
+        hint = submitted.has(`${g.day}:speech`)
+          ? '，你已结束发言，等待下一位'
+          : '，轮到你发言，可连发多条，说完点「结束发言」';
+      } else if (canPreInput()) {
+        hint = '，还没轮到你，可以先在右侧打字排队';
+      } else {
+        hint = `，等待发言${offline}`;
+      }
+      els.statusPrompt.textContent = `${order.length > 1 ? `发言顺序：${list}。` : ''}当前 ${pad(speaker)} 号（${position}）${hint}。`;
     }
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.statusPrompt.textContent = '投票：点击座位选择目标，不能投自己，也可以弃权。';
@@ -1510,7 +1657,7 @@ function renderActionPanel(mode, inGame) {
   } else if (g.phase === 'day') {
     renderDayPanel(seat, role);
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
-    renderVotePanel(seat);
+    renderVotePanel(seat, role);
   } else if (g.phase === 'hunter') {
     els.actionArea.append(note('等待猎人开枪…'));
   } else if (g.phase === 'dawn') {
@@ -1581,24 +1728,27 @@ function renderNightPanel(seat, role) {
     return;
   }
   if (step === 'witch' && role === 'witch') {
-    els.actionArea.append(note(`女巫行动：解药${g.potions.save ? '可用' : '已用'}，毒药${g.potions.poison ? '可用' : '已用'}。一晚最多用一瓶。`));
+    els.actionArea.append(note(`女巫行动（${Math.round(DUR.witch / 1000)} 秒）：解药${g.potions.save ? '可用' : '已用'}，毒药${g.potions.poison ? '可用' : '已用'}，一晚最多用一瓶。`));
     if (g.kill != null) {
-      els.actionArea.append(note(`今晚 ${pad(g.kill)} 号被狼人袭击。`));
+      els.actionArea.append(note(g.kill === seat
+        ? `今晚 ${pad(g.kill)} 号被狼人袭击（就是你）。你仍然可以自救，或者放弃解药直接开毒。`
+        : `今晚 ${pad(g.kill)} 号被狼人袭击。`));
       if (g.potions.save) {
         els.actionArea.append(makeBtn(`用解药救 ${pad(g.kill)} 号`, 'btn-success', () => act('witch', null, { save: true })));
       }
     } else {
-      els.actionArea.append(note('今晚没有人被袭击。'));
+      els.actionArea.append(note('今晚没有人被袭击，可以直接用毒药或跳过。'));
     }
     if (g.potions.poison) {
       if (pick && pick.kind === 'poison') {
-        els.actionArea.append(note('毒药：点击一名玩家，再点确认。'));
+        els.actionArea.append(note('毒药：点击一名玩家，再点「确认」才会生效。'));
         els.actionArea.append(pickButtons((sel) => act('witch', sel[0], { poison: sel[0] })));
       } else {
         els.actionArea.append(makeBtn('用毒药', 'btn-danger', () => {
           beginPick('poison', aliveSeats, 1, (sel) => act('witch', sel[0], { poison: sel[0] }));
           renderRoom();
         }));
+        els.actionArea.append(note('用毒和救人二选一：选了解药这一晚就不能再毒人。'));
       }
     }
     els.actionArea.append(makeBtn('不用药（过）', 'btn-outline-secondary', () => act('witch', null, {})));
@@ -1622,7 +1772,65 @@ function renderNightPanel(seat, role) {
   els.actionArea.append(note(`第 ${g.day} 夜：等待其他人行动…`));
 }
 
+function canSelfExplode(role) {
+  return role === 'werewolf' || role === 'wolfking';
+}
+
+function explodeStep() {
+  return g.phase === 'day' ? 'day' : (g.step || 'day');
+}
+
+function renderExplodePick(seat, role) {
+  if (!canSelfExplode(role) || !isAliveSeat(seat)) return false;
+  const step = explodeStep();
+  if (pick && pick.kind === 'explodeConfirm') {
+    els.actionArea.append(note(role === 'wolfking'
+      ? '确认白狼王自爆（不带人）：你翻牌出局，今天我不能再投票，剩余流程全部跳过，直接进入黑夜。'
+      : '确认自爆：你翻牌出局，今天我不能再投票，剩余流程全部跳过，直接进入黑夜。'));
+    const wrap = document.createElement('div');
+    wrap.className = 'sr-act w-100';
+    wrap.append(
+      makeBtn('确认自爆', 'btn-danger', () => {
+        pick = null;
+        act(step, null, { explode: true });
+      }),
+      makeBtn('取消', 'btn-outline-secondary', clearPick),
+    );
+    els.actionArea.append(wrap);
+    return true;
+  }
+  if (pick && pick.kind === 'explode') {
+    els.actionArea.append(note('白狼王自爆带人：点击要带走的玩家，再点确认，立即进入黑夜。'));
+    els.actionArea.append(pickButtons((sel) => act(step, sel[0], { explode: true, target: sel[0] })));
+    return true;
+  }
+  return false;
+}
+
+function appendExplodeButtons(seat, role) {
+  if (!canSelfExplode(role) || !isAliveSeat(seat)) return;
+  const step = explodeStep();
+  if (role === 'wolfking') {
+    els.actionArea.append(makeBtn('自爆带人', 'btn-danger', () => {
+      beginPick('explode', g.aliveSeats.filter((s) => s !== seat), 1,
+        (sel) => act(step, sel[0], { explode: true, target: sel[0] }));
+      renderRoom();
+    }));
+    els.actionArea.append(makeBtn('只自爆（不带人）', 'btn-outline-danger', () => {
+      pick = { kind: 'explodeConfirm', allowed: new Set(), max: 0, selected: [] };
+      renderRoom();
+    }));
+  } else {
+    els.actionArea.append(makeBtn('自爆（立即天黑）', 'btn-outline-danger', () => {
+      pick = { kind: 'explodeConfirm', allowed: new Set(), max: 0, selected: [] };
+      renderRoom();
+    }));
+  }
+  els.actionArea.append(note('自爆后你立即出局，今天的投票和剩余流程全部跳过，直接进入黑夜。'));
+}
+
 function renderDayPanel(seat, role) {
+  if (!submittedHelp('day') && renderExplodePick(seat, role)) return;
   if (role === 'knight' && !g.knightUsed && !submittedHelp('day')) {
     if (pick && pick.kind === 'duel') {
       els.actionArea.append(note('骑士决斗：对方是狼人则对方出局并直接天黑；对方是好人则你出局。'));
@@ -1635,31 +1843,21 @@ function renderDayPanel(seat, role) {
       els.actionArea.append(note('白天可以发起一次决斗，投票前使用。'));
     }
   }
-  if (role === 'wolfking' && !submittedHelp('day')) {
-    if (pick && pick.kind === 'explode') {
-      els.actionArea.append(note('白狼王自爆：选择要带走的玩家，然后立即进入黑夜。'));
-      els.actionArea.append(pickButtons((sel) => act('day', sel[0], { explode: true, target: sel[0] })));
-    } else {
-      els.actionArea.append(makeBtn('自爆带人', 'btn-danger', () => {
-        beginPick('explode', g.aliveSeats.filter((s) => s !== seat), 1, (sel) => act('day', sel[0], { explode: true, target: sel[0] }));
-        renderRoom();
-      }));
-      els.actionArea.append(note('也可以直接在右侧发言与大家讨论。'));
-    }
-  }
+  if (!submittedHelp('day')) appendExplodeButtons(seat, role);
   if (!els.actionArea.childElementCount) {
     const speaker = currentSpeaker();
     els.actionArea.append(note(speaker === seat
       ? '轮到你发言：在右侧输入，可连发多条，说完点「结束发言」。'
-      : `按固定顺序发言，等待 ${speaker != null ? `${pad(speaker)} 号` : '下一位'}。`));
+      : `按固定顺序发言，等待 ${speaker != null ? `${pad(speaker)} 号` : '下一位'}；还没轮到你时也可以先在右侧打字，轮到你自动发出。`));
   }
 }
 
-function renderVotePanel(seat) {
+function renderVotePanel(seat, role) {
   if (submittedHelp(g.step)) {
     els.actionArea.append(note('已投票，等待其他玩家…'));
     return;
   }
+  if (renderExplodePick(seat, role)) return;
   let allowed = g.aliveSeats.filter((s) => s !== seat);
   if (g.phase === 'runoff' && g.runoffSeats) {
     allowed = allowed.filter((s) => g.runoffSeats.includes(s));
@@ -1672,6 +1870,7 @@ function renderVotePanel(seat) {
     : '投票：点击座位选择你要放逐的人，不能投自己。'));
   els.actionArea.append(pickButtons((sel) => act(g.step, sel[0])));
   els.actionArea.append(makeBtn('弃权', 'btn-outline-secondary', () => act(g.step, -1)));
+  appendExplodeButtons(seat, role);
 }
 
 function renderHunterPanel(seat) {
@@ -1709,6 +1908,17 @@ function renderMyBar() {
   els.roleName.textContent = role.name;
   els.roleCamp.textContent = role.campName || camp.name;
   els.roleSkill.textContent = role.skill;
+  if (role.explode) {
+    els.roleExplode.hidden = false;
+    els.roleExplode.textContent = role.explode === '不可以'
+      ? '本角色不能自爆'
+      : `白天可自爆${role.explode === '可以（可带一人）' ? '（可带一人）' : ''}`;
+    els.roleExplode.classList.toggle('sr-explode-no', role.explode === '不可以');
+  } else {
+    els.roleExplode.hidden = true;
+    els.roleExplode.textContent = '';
+    els.roleExplode.classList.remove('sr-explode-no');
+  }
   els.roleCard.hidden = !roleShown;
 
   const extras = [];
@@ -1853,15 +2063,25 @@ function renderGameOver() {
 function updateChatForm() {
   const alive = isAliveSeat(myRow?.seat);
   const speaker = currentSpeaker();
+  if (g && preSpeech.msgs.length && preSpeech.day !== g.day) clearPreSpeech();
   const wolfNight = Boolean(g) && g.phase === 'night' && isMyWolf() && alive;
   const speechDone = Boolean(g) && submitted.has(`${g.day}:speech`);
   const myTurn = Boolean(g) && g.phase === 'day' && alive && speaker === myRow?.seat && !speechDone;
-  const canChat = wolfNight || myTurn;
+  const preTurn = Boolean(g) && g.phase === 'day' && alive && !myTurn && !speechDone && canPreInput();
+  const canChat = wolfNight || myTurn || preTurn;
+  const pending = myTurn ? pendingSpeechCount() : 0;
+  const submitBtn = els.chatForm.querySelector('button[type="submit"]');
 
   els.chatInput.disabled = !canChat;
-  els.chatForm.querySelector('button[type="submit"]').disabled = !canChat;
+  submitBtn.disabled = !canChat;
+  submitBtn.textContent = preTurn ? '排队' : '发送';
+  els.chatInput.placeholder = preTurn
+    ? '还没轮到你，可以先打字，轮到你时自动发出'
+    : '输入发言（回车发送）';
   els.endSpeechBtn.hidden = !myTurn;
   els.endSpeechBtn.disabled = speechDone;
+
+  if (myTurn && pending) setTimeout(flushPreSpeech, 100);
 
   if (!g) {
     els.chatTitle.textContent = '白天发言';
@@ -1880,9 +2100,12 @@ function updateChatForm() {
     els.chatNote.textContent = '对局已结束';
   } else if (g.phase === 'day') {
     if (!alive) els.chatNote.textContent = '你已出局，只能旁观';
-    else if (myTurn) els.chatNote.textContent = `轮到你（第 ${g.speechIndex + 1} / ${g.speechOrder?.length || 0} 位）`;
-    else if (speaker === myRow?.seat) els.chatNote.textContent = '已结束发言，等待下一位';
-    else if (speaker != null) els.chatNote.textContent = `等待 ${pad(speaker)} 号发言`;
+    else if (myTurn) {
+      els.chatNote.textContent = `轮到你（第 ${g.speechIndex + 1} / ${g.speechOrder?.length || 0} 位）${pending ? ` · 先发排队 ${pending} 条` : ''}`;
+    } else if (speaker === myRow?.seat) els.chatNote.textContent = '已结束发言，等待下一位';
+    else if (preTurn) {
+      els.chatNote.textContent = `等待 ${pad(speaker)} 号发言 · 可提前打字${pendingSpeechCount() ? `，已排队 ${pendingSpeechCount()} 条` : ''}`;
+    } else if (speaker != null) els.chatNote.textContent = `等待 ${pad(speaker)} 号发言`;
     else els.chatNote.textContent = '发言结束，准备投票';
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.chatNote.textContent = '投票中不能发言';
@@ -1971,7 +2194,7 @@ async function startGame() {
       ratingApplied: false,
     };
     g.log.push({ day: 1, kind: 'night', text: '第 1 夜 · 天黑请闭眼' });
-    startNightInternal(true);
+    await startNightInternal(true);
   } catch (error) {
     toast(`发牌失败：${friendlyError(error)}`);
     g = null;
@@ -2003,7 +2226,7 @@ function buildNightQueue() {
   return queue;
 }
 
-function startNightInternal(first) {
+async function startNightInternal(first) {
   if (!first) g.day += 1;
   g.phase = 'night';
   g.kill = null;
@@ -2017,14 +2240,15 @@ function startNightInternal(first) {
   g.nightQueue = buildNightQueue();
   g.nightIndex = 0;
   if (!first) g.log.push({ day: g.day, kind: 'night', text: `第 ${g.day} 夜 · 天黑请闭眼` });
-  if (g.nightQueue.length) enterStep(g.nightQueue[0]);
-  else finishNight();
+  if (g.nightQueue.length) await enterStep(g.nightQueue[0]);
+  else await finishNight();
 }
 
-function enterStep(step) {
+async function enterStep(step) {
   g.step = step;
-  g.deadline = Date.now() + (DUR[step] || 20000);
-  saveGame();
+  g.stepStart = Date.now();
+  g.deadline = Date.now() + (DUR[step] || 30000);
+  await saveGame();
 }
 
 function expectedSeats(step) {
@@ -2055,10 +2279,15 @@ function expectedSeats(step) {
 }
 
 function allActed(step, actions) {
-  const expected = expectedSeats(step).filter((seat) => isSeatOnline(seat));
+  const expected = expectedSeats(step);
   if (!expected.length) return true;
   const acted = new Set(actions.filter((a) => a.payload && !a.payload.ignore).map((a) => a.seat));
-  return expected.every((seat) => acted.has(seat));
+  if (expected.every((seat) => acted.has(seat))) return true;
+  if (g.phase !== 'night') return false;
+  // 夜晚给离线/掉线玩家留一点反应时间，避免女巫刚被判定离线就被跳过
+  const started = g.stepStart || (g.deadline ? g.deadline - (DUR[step] || 30000) : Date.now());
+  if (Date.now() - started < 12000) return false;
+  return expected.every((seat) => acted.has(seat) || !isSeatOnline(seat));
 }
 
 async function hostTick() {
@@ -2069,7 +2298,11 @@ async function hostTick() {
     const actions = await fetchActions(g.day, g.step || 'day');
     const now = Date.now();
     if (g.phase === 'night') {
-      if (allActed(g.step, actions) || now >= g.deadline) await resolveNightStep(actions);
+      if (allActed(g.step, actions) || now >= g.deadline) {
+        // 超时结算前再取一次，避免女巫/预言家在最后一刻提交的动作被漏掉
+        const finalActions = now >= g.deadline ? await fetchActions(g.day, g.step) : actions;
+        await resolveNightStep(finalActions);
+      }
     } else if (g.phase === 'dawn') {
       if (now >= g.deadline) await startDay();
     } else if (g.phase === 'day') {
@@ -2091,6 +2324,11 @@ async function hostTick() {
       );
       if (ended || now >= g.deadline) await advanceSpeech();
     } else if (g.phase === 'vote' || g.phase === 'runoff') {
+      const boom = findExplodeAction(actions);
+      if (boom) {
+        await resolveExplode(boom);
+        return;
+      }
       if (allActed(g.step, actions) || now >= g.deadline) await resolveVote(actions);
     } else if (g.phase === 'hunter') {
       if (allActed('hunter', actions) || now >= g.deadline) await resolveHunter(actions);
@@ -2481,27 +2719,46 @@ async function handleDaySpecial(actions) {
     return true;
   }
 
-  const wolfkingSeat = roleSeat('wolfking');
-  const boom = wolfkingSeat != null && isAliveSeat(wolfkingSeat)
-    ? actions.find((a) => a.seat === wolfkingSeat && a.payload?.explode)
-    : null;
+  const boom = findExplodeAction(actions);
   if (boom) {
-    const target = boom.payload.target != null ? Number(boom.payload.target) : null;
-    g.log.push({ day: g.day, kind: 'system', text: `白狼王 ${pad(wolfkingSeat)} 号自爆${target ? `，带走 ${pad(target)} 号` : ''}，直接进入黑夜` });
-    const raw = [{ seat: wolfkingSeat, reason: 'explode' }];
-    if (target && isAliveSeat(target) && target !== wolfkingSeat) raw.push({ seat: target, reason: 'explode' });
-    const deaths = Rules.expandDeaths(raw, {
-      alive: aliveSet(),
-      lovers: g.lovers,
-      wolfbeautySeat: roleSeat('wolfbeauty'),
-      charmTarget: g.charmTarget,
-    });
-    const outcome = await applyDeaths(deaths, 'day');
-    if (outcome === 'continue') await startNightInternal(false);
-    renderRoom();
+    await resolveExplode(boom);
     return true;
   }
   return false;
+}
+
+// 普通狼人、白狼王可自爆；狼美人不能自爆
+function findExplodeAction(actions) {
+  return actions.find((action) => {
+    if (!action.payload?.explode) return false;
+    if (!isAliveSeat(action.seat)) return false;
+    const row = rowBySeat(action.seat);
+    return row && canSelfExplode(row.role);
+  }) || null;
+}
+
+async function resolveExplode(action) {
+  const seat = action.seat;
+  const row = rowBySeat(seat);
+  const isKing = row?.role === 'wolfking';
+  let target = isKing && action.payload.target != null ? Number(action.payload.target) : null;
+  if (target != null && (!isAliveSeat(target) || target === seat)) target = null;
+  g.log.push({
+    day: g.day,
+    kind: 'system',
+    text: `${isKing ? '白狼王' : '狼人'} ${pad(seat)} 号自爆${target != null ? `，带走 ${pad(target)} 号` : ''}，今天剩余流程全部跳过，立即进入黑夜`,
+  });
+  const raw = [{ seat, reason: 'selfboom' }];
+  if (target != null) raw.push({ seat: target, reason: 'explode' });
+  const deaths = Rules.expandDeaths(raw, {
+    alive: aliveSet(),
+    lovers: g.lovers,
+    wolfbeautySeat: roleSeat('wolfbeauty'),
+    charmTarget: g.charmTarget,
+  });
+  const outcome = await applyDeaths(deaths, 'day');
+  if (outcome === 'continue') await startNightInternal(false);
+  renderRoom();
 }
 
 async function startVote() {
@@ -2635,6 +2892,7 @@ async function leaveRoom() {
     return;
   }
   const leaving = session;
+  clearPreSpeech();
   session = null;
   stopPolling();
   stopHost();
@@ -2673,6 +2931,7 @@ async function replayGame() {
     g = null;
     hostRoles = [];
     allRoles = [];
+    clearPreSpeech();
     room = Object.assign({}, room, { options });
     phaseKey = '';
     toast('已重置房间，可以重新开一局');
@@ -2763,13 +3022,27 @@ els.chatForm.addEventListener('submit', (event) => {
   if (!g || !isAliveSeat(myRow?.seat)) return;
   const text = els.chatInput.value.trim();
   if (!text) return;
-  let step = null;
-  if (g.phase === 'night' && isMyWolf()) step = 'wolfchat';
-  else if (g.phase === 'day' && currentSpeaker() === myRow?.seat) step = 'chat';
-  if (!step) return;
-  els.chatInput.value = '';
-  act(step, null, { name: members.find((m) => m.id === session.playerId)?.name || session.name, text });
-  setTimeout(loadChat, 300);
+  const name = profile?.username || session.name || '';
+  if (g.phase === 'night' && isMyWolf()) {
+    els.chatInput.value = '';
+    act('wolfchat', null, { name, text });
+    setTimeout(loadChat, 300);
+    return;
+  }
+  if (g.phase !== 'day') return;
+  const speaker = currentSpeaker();
+  const speechDone = submitted.has(`${g.day}:speech`);
+  if (speaker === myRow?.seat && !speechDone) {
+    els.chatInput.value = '';
+    act('chat', null, { name, text });
+    setTimeout(loadChat, 300);
+    return;
+  }
+  if (speaker != null && canPreInput()) {
+    els.chatInput.value = '';
+    queueSpeech(text);
+    els.chatInput.focus();
+  }
 });
 
 els.endSpeechBtn.addEventListener('click', () => {

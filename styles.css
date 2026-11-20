@@ -45,6 +45,23 @@ body {
 .sr-tag-civilian { background: #5a6268; }
 .sr-tag-neutral { background: #6f42c1; }
 
+.sr-explode-badge {
+  display: inline-block;
+  padding: 0 0.45em;
+  border-radius: 0.3em;
+  font-size: 80%;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: #842029;
+  background: #f8d7da;
+}
+
+.sr-explode-badge.sr-explode-no {
+  color: #084298;
+  background: #cfe2ff;
+}
+
 #roomCode {
   letter-spacing: 0.25em;
   text-align: center;
@@ -316,6 +333,8 @@ body {
 .sr-chat-msg { margin: 4px 0; padding: 2px 4px; }
 .sr-chat-who { font-weight: 600; margin-right: 6px; color: #343a40; }
 .sr-chat-text { white-space: pre-wrap; word-break: break-word; }
+.sr-chat-pending { opacity: 0.55; font-style: italic; }
+.sr-chat-pending .sr-chat-who { color: #6c757d; }
 
 .sr-winner {
   padding: 12px 16px;
