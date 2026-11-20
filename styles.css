@@ -203,6 +203,10 @@ body {
   filter: grayscale(0.9);
 }
 
+.sr-seat.sr-offline .sr-avatar {
+  opacity: 0.45;
+}
+
 .sr-seat.sr-clickable { cursor: pointer; }
 
 .sr-seat.sr-clickable:hover,

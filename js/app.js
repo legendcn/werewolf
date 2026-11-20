@@ -133,6 +133,9 @@ let hostBusy = false;
 let wolfPicks = [];
 let chatRows = [];
 let wolfChatRows = [];
+let presenceReady = false;
+let onlineIds = new Set();
+let knownOnline = new Set();
 let ratings = new Map();
 let ratingsKey = '';
 let leaderboardData = [];
@@ -349,6 +352,9 @@ function enterRoom(nextSession) {
   localFeed = [];
   chatRows = [];
   wolfChatRows = [];
+  presenceReady = false;
+  onlineIds = new Set();
+  knownOnline = new Set();
   ratings = new Map();
   ratingsKey = '';
   submitted = new Set();
@@ -386,7 +392,7 @@ function subscribeRoom() {
   if (channel) channel.unsubscribe();
   const code = session.code;
   channel = client
-    .channel(`room:${code}`)
+    .channel(`room:${code}`, { config: { presence: { key: session.playerId } } })
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'players', filter: `room_code=eq.${code}` },
@@ -406,12 +412,46 @@ function subscribeRoom() {
         applyRoom(payload.new);
       }
     )
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') setConn('已连接 · 实时同步中', true);
-      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+    .on('presence', { event: 'sync' }, () => applyPresence())
+    .on('presence', { event: 'join' }, () => applyPresence())
+    .on('presence', { event: 'leave' }, () => applyPresence())
+    .subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        setConn('已连接 · 实时同步中', true);
+        try {
+          await channel.track({ player: session.playerId, name: session.name });
+        } catch {
+          // 离线检测失败时按“在线”处理，不影响对局
+        }
+        applyPresence();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         setConn('实时连接异常，可尝试退出重进');
       }
     });
+}
+
+function applyPresence() {
+  if (!channel || !session) return;
+  const state = channel.presenceState() || {};
+  const ids = new Set();
+  Object.values(state).forEach((list) => {
+    (list || []).forEach((meta) => { if (meta.player) ids.add(meta.player); });
+  });
+  presenceReady = true;
+  onlineIds = ids;
+  ids.forEach((id) => knownOnline.add(id));
+  renderRoom();
+}
+
+function isPlayerOnline(row) {
+  if (!row) return true;
+  if (!presenceReady || !knownOnline.has(row.id)) return true;
+  return onlineIds.has(row.id);
+}
+
+function isSeatOnline(seat) {
+  const row = (hostRoles.length ? hostRoles : members).find((item) => item.seat === seat);
+  return row ? isPlayerOnline(row) : true;
 }
 
 function startPolling() {
@@ -856,7 +896,8 @@ function renderStatusPrompt(mode, inGame) {
     } else {
       const position = `第 ${g.speechIndex + 1} / ${order.length} 位`;
       const list = order.map(pad).join(' → ');
-      els.statusPrompt.textContent = `${order.length > 1 ? `发言顺序：${list}。` : ''}当前 ${pad(speaker)} 号（${position}）${speaker === myRow?.seat ? '，轮到你发言，可连发多条，说完点「结束发言」' : '，等待发言'}。`;
+      const offline = isSeatOnline(speaker) ? '' : '，对方离线，将自动跳过';
+      els.statusPrompt.textContent = `${order.length > 1 ? `发言顺序：${list}。` : ''}当前 ${pad(speaker)} 号（${position}）${speaker === myRow?.seat ? '，轮到你发言，可连发多条，说完点「结束发言」' : `，等待发言${offline}`}。`;
     }
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.statusPrompt.textContent = '投票：点击座位选择目标，不能投自己，也可以弃权。';
@@ -946,6 +987,13 @@ function renderSeats(mode, inGame) {
         out.className = 'badge badge-secondary';
         out.textContent = '出局';
         marks.append(out);
+      }
+      if (!isPlayerOnline(member)) {
+        const off = document.createElement('span');
+        off.className = 'badge badge-warning';
+        off.textContent = '离线';
+        marks.append(off);
+        li.classList.add('sr-offline');
       }
     }
 
@@ -1620,7 +1668,7 @@ function expectedSeats(step) {
 }
 
 function allActed(step, actions) {
-  const expected = expectedSeats(step);
+  const expected = expectedSeats(step).filter((seat) => isSeatOnline(seat));
   if (!expected.length) return true;
   const acted = new Set(actions.filter((a) => a.payload && !a.payload.ignore).map((a) => a.seat));
   return expected.every((seat) => acted.has(seat));
@@ -1643,6 +1691,11 @@ async function hostTick() {
       const speaker = currentSpeaker();
       if (speaker == null) {
         await startVote();
+        return;
+      }
+      if (!isSeatOnline(speaker)) {
+        g.log.push({ day: g.day, kind: 'system', text: `${pad(speaker)} 号离线，跳过发言` });
+        await advanceSpeech();
         return;
       }
       const speechActions = await fetchActions(g.day, 'speech');
@@ -1973,9 +2026,23 @@ async function startDay() {
 
 async function advanceSpeech() {
   if (!g || g.phase !== 'day') return;
+  const skipped = [];
   g.speechIndex += 1;
-  while (g.speechIndex < g.speechOrder.length && !isAliveSeat(g.speechOrder[g.speechIndex])) {
-    g.speechIndex += 1;
+  while (g.speechIndex < g.speechOrder.length) {
+    const seat = g.speechOrder[g.speechIndex];
+    if (!isAliveSeat(seat)) {
+      g.speechIndex += 1;
+      continue;
+    }
+    if (!isSeatOnline(seat)) {
+      skipped.push(seat);
+      g.speechIndex += 1;
+      continue;
+    }
+    break;
+  }
+  if (skipped.length) {
+    g.log.push({ day: g.day, kind: 'system', text: `${skipped.map(pad).join('、')} 号离线，跳过发言` });
   }
   if (g.speechIndex >= g.speechOrder.length) {
     await startVote();
