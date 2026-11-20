@@ -56,6 +56,7 @@ async function restoreSession() {
     localStorage.removeItem(SESSION_KEY);
     return;
   }
+  if (parsed.accountId && parsed.accountId !== profile?.id) return;
   const result = await gameRequest('restore', parsed.code);
   if (epoch !== authEpoch || session || localStorage.getItem(SESSION_KEY) !== saved) return;
   if (result.gone) localStorage.removeItem(SESSION_KEY);
@@ -70,6 +71,10 @@ function isSeatOnline(seat) {
 
 function applySnapshot(data) {
   if (!session || data.code !== session.code || data.revision < (room?.revision ?? -1)) return;
+  if (data.me?.id !== session.playerId) {
+    exitRoomLocal('此标签页的座位已失效。刷新可恢复当前座位，或用房间码重新加入。');
+    return;
+  }
   const previous = g;
   room = data;
   members = data.members;

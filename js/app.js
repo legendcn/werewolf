@@ -220,6 +220,8 @@ let feedSeeded = false;
 let profile = null;
 let authBusy = false;
 let authEpoch = 0; // invalidate responses that started under a previous login
+let authUserId = null; // SDK principal, even while the profile is still loading
+let profileRead = null;
 let pendingTimer = null;
 let approvedRouted = false;
 let spectate = null;
@@ -474,14 +476,24 @@ function clearAuthViews() {
   profile = null;
   approvedRouted = false;
   stopPendingPoll();
-  stopPolling();
-  polling = null;
-  clearSettlementRetry();
-  clearPreSpeech();
+  clearRoomViews();
   for (const key of Object.keys(localStorage)) {
     if (key.startsWith('wolf.prespeech:')) localStorage.removeItem(key);
   }
-  session = room = myRow = g = pick = kickAsked = appointId = replayData = null;
+  replayData = null;
+  for (const el of [els.spectateCode, els.spectatePrompt, els.spectateSeats, els.spectateChat, els.spectateFeed,
+    els.replayCode, els.replayWinner, els.replayMeta, els.replayPlayers, els.replayTimeline, els.replayLog, els.adminBody]) el.replaceChildren();
+  clearTimeout(toastTimer);
+  els.toast.hidden = true; els.toast.textContent = '';
+  showHome(); // also invalidates the active spectator request
+}
+
+function clearRoomViews() {
+  stopPolling();
+  polling = null;
+  clearSettlementRetry();
+  clearPreSpeech(); // while the old member's draft key is still available
+  session = room = myRow = g = pick = kickAsked = appointId = null;
   members = []; localFeed = []; chatRows = []; wolfChatRows = []; wolfPicks = [];
   submitted.clear(); ratings.clear(); ratingsKey = ''; phaseKey = '';
   feedSeeded = roleShown = preFlushing = false;
@@ -493,15 +505,11 @@ function clearAuthViews() {
   els.revealBtn.textContent = '查看我的身份牌';
   for (const el of [els.roleTag, els.roleName, els.roleCamp, els.roleSkill, els.roleExplode, els.roleExtra,
     els.mySeat, els.chatTitle, els.chatNote, els.winnerText, els.resultNote, els.revealBody,
-    els.roomCodeLabel, els.activeRoomCode, els.spectateCode, els.spectatePrompt, els.spectateSeats,
-    els.spectateChat, els.spectateFeed, els.replayCode, els.replayWinner, els.replayMeta, els.replayPlayers,
-    els.replayTimeline, els.replayLog, els.adminBody]) el.replaceChildren();
-  clearTimeout(toastTimer);
-  els.toast.hidden = true; els.toast.textContent = '';
-  showHome(); // also invalidates the active spectator request
+    els.roomCodeLabel, els.activeRoomCode]) el.replaceChildren();
 }
 
 function showAuthScreen() {
+  authUserId = null;
   clearAuthViews();
   applyAccountUI();
   openAuthModal();
@@ -545,8 +553,17 @@ async function afterApproved() {
   }
 }
 
-async function fetchProfileAndRoute(allowRepair = true) {
+function fetchProfileAndRoute() {
   const epoch = authEpoch;
+  if (profileRead?.epoch === epoch) return profileRead.promise;
+  const promise = readProfileAndRoute(epoch).finally(() => {
+    if (profileRead?.promise === promise) profileRead = null;
+  });
+  profileRead = { epoch, promise };
+  return promise;
+}
+
+async function readProfileAndRoute(epoch, allowRepair = true) {
   const { data: userData, error: userError } = await client.auth.getUser();
   if (epoch !== authEpoch) return false;
   if (userError) throw userError;
@@ -554,6 +571,7 @@ async function fetchProfileAndRoute(allowRepair = true) {
     showAuthScreen();
     return false;
   }
+  if (authUserId !== userData.user.id) return false;
   const { data, error } = await client
     .from('profiles')
     .select('id, username, role, status')
@@ -572,7 +590,7 @@ async function fetchProfileAndRoute(allowRepair = true) {
     if (allowRepair && n && NAME_RE.test(n)) {
       const repair = await client.rpc('repair_wolf_profile', { n });
       if (epoch !== authEpoch) return false;
-      if (!repair.error) return fetchProfileAndRoute(false);
+      if (!repair.error) return readProfileAndRoute(epoch, false);
     }
     showAuthProblem(
       '账号资料缺失',
@@ -827,7 +845,7 @@ function updateModeHint() {
 function enterRoom(nextSession) {
   clearSettlementRetry();
   session = nextSession;
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...session, accountId: profile?.id }));
   els.roomCodeLabel.textContent = session.code;
   room = null;
   members = [];
@@ -2763,17 +2781,16 @@ function updateChatForm() {
 
 function exitRoomLocal(message) {
   if (!session) return;
-  clearPreSpeech();
-  clearSettlementRetry();
-  session = null;
-  stopPolling();
-  localStorage.removeItem(SESSION_KEY);
-  room = null;
-  members = [];
-  myRow = null;
-  g = null;
-  pick = null;
-  kickAsked = null;
+  const old = session;
+  clearRoomViews();
+  // Another tab may have already rejoined and saved its new membership.
+  const saved = localStorage.getItem(SESSION_KEY);
+  if (saved) {
+    try {
+      const record = JSON.parse(saved);
+      if (record?.code === old.code && record.playerId === old.playerId) localStorage.removeItem(SESSION_KEY);
+    } catch { /* Not this membership's record. */ }
+  }
   showHome();
   setStatus(message);
   toast(message);
@@ -3133,9 +3150,10 @@ async function doLogout() {
   authBusy = true;
   try {
     stopPendingPoll();
-    await client.auth.signOut();
-    localStorage.removeItem(SESSION_KEY);
-    showAuthScreen();
+    const { error } = await client.auth.signOut();
+    if (error) throw error;
+    // SIGNED_OUT clears the old view; don't wipe a more recent login or another tab's seat.
+    if (authUserId !== null) return;
     els.loginForm.reset();
     els.registerForm.reset();
     setStatus('已退出登录 · 请重新登录');
@@ -3167,7 +3185,30 @@ function guardClient() {
   return false;
 }
 
-async function boot() {
+function onAuthChange(event, sdkSession) {
+  const id = sdkSession?.user?.id;
+  if (event === 'SIGNED_OUT' || (event === 'INITIAL_SESSION' && !id)) {
+    showAuthScreen();
+    return;
+  }
+  if (!id || id === authUserId) return; // same user: token refresh/refocus is not a logout
+  if (authUserId !== null || (profile && profile.id !== id)) {
+    clearAuthViews(); // synchronous: no old frame or outstanding response survives a switch
+    applyAccountUI();
+    setStatus('账号已切换，正在读取资料…');
+  } else ++authEpoch;
+  authUserId = id;
+  const epoch = authEpoch;
+  // Supabase holds its auth lock during callbacks. Defer all SDK reads until it releases it.
+  setTimeout(() => {
+    if (epoch !== authEpoch || profile?.id === id) return;
+    fetchProfileAndRoute().catch(error => {
+      if (epoch === authEpoch) showAuthProblem('读取账号失败', friendlyAuthError(error));
+    });
+  }, 0);
+}
+
+function boot() {
   fillModeSelect();
 
   const savedName = localStorage.getItem(NAME_KEY);
@@ -3188,22 +3229,8 @@ async function boot() {
   }
 
   setStatus('服务器已连接 · 请登录或注册');
-  client.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_OUT') showAuthScreen();
-  });
-
-  try {
-    const { data } = await client.auth.getSession();
-    if (!data?.session) {
-      showAuthScreen();
-      return;
-    }
-    const ok = await fetchProfileAndRoute();
-    if (!ok) setStatus('已登录 · 账号状态异常，请查看上方提示');
-  } catch (error) {
-    showAuthScreen();
-    toast(friendlyAuthError(error));
-  }
+  // INITIAL_SESSION also handles startup; don't race it with a separate getSession().
+  client.auth.onAuthStateChange(onAuthChange);
 }
 
 boot();

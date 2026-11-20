@@ -20,10 +20,7 @@ async function page(t, overrides = {}) {
   w.supabase = {
     createClient: () => ({
       auth: {
-        onAuthStateChange() {},
-        async getSession() {
-          return { data: { session: null } };
-        },
+        onAuthStateChange(cb) { queueMicrotask(() => cb('INITIAL_SESSION', null)); },
       },
       ...overrides,
     }),
@@ -51,6 +48,30 @@ test('reconnect retains saved membership on error, removes it only on confirmed 
   await run('restoreSession()');
   assert.equal(w.localStorage.getItem('wolf.session'), null);
 });
+for (const late of ['snapshot', 'gone']) {
+  test(`old tab receiving ${late} after rejoin keeps the newer reconnect record and never adopts its snapshot`, async t => {
+    let finish;
+    const token = {code:'123456',playerId:'new',accountId:'alice'};
+    const {run,w} = await page(t, { functions:{ invoke: (_, {body}) => body.op === 'restore'
+      ? Promise.resolve({data:token}) : new Promise(resolve => {finish = resolve;}) } });
+    run(`profile={id:'alice',status:'approved'}; session={code:'123456',playerId:'old'};
+      room={revision:1}; myRow={id:'old'}; loadLeaderboard=loadHistory=()=>{}; showRoom();
+      els.roleName.textContent='OLD_CARD'; startPolling();`);
+    const pending = run(`roomCommand('snapshot')`);
+    // Same-origin tab B has left and rejoined while A was awaiting its snapshot.
+    const storage = w.localStorage; storage.setItem('wolf.session',JSON.stringify(token));
+    finish({data:late === 'gone' ? {gone:true} : {code:token.code,revision:12,me:{id:'new',role:'witch'}}});
+    await pending;
+    assert.equal(run('session === null && room === null && myRow === null && pollTimer === null'),true);
+    assert.equal(run('els.roleName.textContent'),'');
+    assert.deepEqual(JSON.parse(storage.getItem('wolf.session')),token);
+    run(`profile.id='bob'; pollOnce=startPolling=()=>{}`); await run('restoreSession()');
+    assert.equal(run('session'),null); assert.deepEqual(JSON.parse(storage.getItem('wolf.session')),token);
+    run(`profile.id='alice'`); await run('restoreSession()');
+    assert.equal(run('session.playerId'),'new');
+  });
+}
+
 test('real DOM accepts a new match and rejects delayed snapshots from the old one', async (t) => {
   const { run, w } = await page(t);
   const mode = MODES[0];
@@ -275,7 +296,7 @@ test('manual settlement retry repeats only a confirmed rolled-back operation wit
     requests.push(body);
     return { data: requests.length === 1 ? { error: '事务已回滚', code: 'SETTLEMENT_RETRY', retry } : { gone: true } };
   } } });
-  run(`session={code:'123456',playerId:'p'};g={matchId:'match'};room={revision:9};`);
+  run(`session={code:'123456',playerId:'p'}; localStorage.setItem(SESSION_KEY,JSON.stringify(session)); g={matchId:'match'};room={revision:9};`);
   await assert.rejects(run(`leaveRoom()`), /已回滚/);
   const button = w.document.querySelector('#retrySettlement');
   assert.equal(button.hidden, false);
@@ -287,6 +308,7 @@ test('manual settlement retry repeats only a confirmed rolled-back operation wit
   assert.deepEqual(JSON.parse(JSON.stringify(requests[1].retry)), retry);
   assert.equal(run('session'), null);
   assert.equal(button.hidden, true);
+  assert.equal(w.localStorage.getItem('wolf.session'), null);
 });
 
 test('ordinary victim can acknowledge an actual settlement snapshot without a hunter action', async (t) => {
