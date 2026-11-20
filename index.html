@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.7.0">
+  <link rel="stylesheet" href="styles.css?v=0.7.1">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -76,6 +76,28 @@
           </div>
         </div>
         <div class="col-lg-5">
+          <div class="card mb-4" id="leaderboard">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>评分排行榜</strong>
+              <small class="text-muted" id="leaderboardNote">前 10 名</small>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0 sr-lb-table">
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">玩家</th>
+                    <th scope="col" class="text-right">评分</th>
+                    <th scope="col" class="text-right">场次</th>
+                    <th scope="col" class="text-right">胜率</th>
+                  </tr>
+                </thead>
+                <tbody id="leaderboardBody">
+                  <tr><td colspan="5" class="text-center text-muted py-3">加载中…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
           <div class="card mb-4">
             <div class="card-header"><strong>房间须知</strong></div>
             <div class="table-responsive">
@@ -195,15 +217,15 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.7.0 · 狼人夜聊 / 顺序发言 / 评分结算 · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.7.1 · 狼人夜聊 / 顺序发言 / Elo 排行榜 · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.7.0"></script>
-  <script src="js/modes.js?v=0.7.0"></script>
-  <script src="js/rules.js?v=0.7.0"></script>
-  <script src="js/app.js?v=0.7.0"></script>
+  <script src="js/config.js?v=0.7.1"></script>
+  <script src="js/modes.js?v=0.7.1"></script>
+  <script src="js/rules.js?v=0.7.1"></script>
+  <script src="js/app.js?v=0.7.1"></script>
 </body>
 </html>

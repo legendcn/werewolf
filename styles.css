@@ -334,6 +334,13 @@ body {
 .sr-delta-up { color: #1e7e34; font-weight: 600; }
 .sr-delta-down { color: #a71d2a; font-weight: 600; }
 
+.sr-lb-table th { white-space: nowrap; }
+.sr-rank { color: #6c757d; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sr-rank-1 { color: #b8860b; }
+.sr-rank-2 { color: #8a8f98; }
+.sr-rank-3 { color: #a05a2c; }
+.sr-lb-rating { font-weight: 700; font-variant-numeric: tabular-nums; }
+
 .sr-rules li + li { margin-top: 0.35rem; }
 
 /* ---------- 页脚 ---------- */

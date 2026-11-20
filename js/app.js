@@ -66,6 +66,8 @@ const els = {
   joinBtn: document.querySelector('#joinForm button'),
   codeInput: document.querySelector('#roomCode'),
   status: document.querySelector('#status'),
+  leaderboardBody: document.querySelector('#leaderboardBody'),
+  leaderboardNote: document.querySelector('#leaderboardNote'),
   connStatus: document.querySelector('#connStatus'),
   roomCodeLabel: document.querySelector('#roomCodeLabel'),
   copyBtn: document.querySelector('#copyCode'),
@@ -133,6 +135,7 @@ let chatRows = [];
 let wolfChatRows = [];
 let ratings = new Map();
 let ratingsKey = '';
+let leaderboardData = [];
 let submitted = new Set();
 let pick = null;
 let phaseKey = '';
@@ -177,6 +180,7 @@ function showRoom() {
 function showHome() {
   els.roomView.hidden = true;
   els.homeView.hidden = false;
+  if (client) loadLeaderboard();
 }
 
 function readName() {
@@ -554,6 +558,89 @@ async function loadRatings() {
   ratings = new Map(names.map((name) => [name, 1500]));
   (data || []).forEach((row) => ratings.set(row.name, row.rating));
   ratingsKey = key;
+}
+
+async function loadLeaderboard() {
+  if (!client) return;
+  els.leaderboardNote.textContent = '加载中…';
+  const { data, error } = await client
+    .from('ratings')
+    .select('name, rating, games, wins')
+    .order('rating', { ascending: false })
+    .order('games', { ascending: false })
+    .order('wins', { ascending: false })
+    .limit(10);
+  if (error) {
+    leaderboardData = [];
+    renderLeaderboard(true);
+    return;
+  }
+  leaderboardData = data || [];
+  renderLeaderboard();
+}
+
+function renderLeaderboard(failed = false) {
+  const frag = document.createDocumentFragment();
+  if (failed) {
+    els.leaderboardNote.textContent = '暂不可用';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 5;
+    td.className = 'text-center text-muted py-3';
+    td.textContent = '排行榜暂不可用（先在 Supabase 运行 migration-v4.sql）';
+    tr.append(td);
+    frag.append(tr);
+    els.leaderboardBody.replaceChildren(frag);
+    return;
+  }
+  if (!leaderboardData.length) {
+    els.leaderboardNote.textContent = '前 10 名';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 5;
+    td.className = 'text-center text-muted py-3';
+    td.textContent = '还没有对局记录，打完一局就能上榜';
+    tr.append(td);
+    frag.append(tr);
+    els.leaderboardBody.replaceChildren(frag);
+    return;
+  }
+
+  els.leaderboardNote.textContent = leaderboardData.length >= 10 ? '前 10 名' : `共 ${leaderboardData.length} 人`;
+  const myName = els.nameInput.value.trim();
+  leaderboardData.forEach((row, index) => {
+    const tr = document.createElement('tr');
+    if (myName && row.name === myName) tr.classList.add('table-info');
+
+    const rankTd = document.createElement('td');
+    rankTd.className = `sr-rank${index < 3 ? ` sr-rank-${index + 1}` : ''}`;
+    rankTd.textContent = index + 1;
+
+    const nameTd = document.createElement('td');
+    nameTd.textContent = row.name;
+    if (myName && row.name === myName) {
+      const me = document.createElement('span');
+      me.className = 'badge badge-primary ml-2';
+      me.textContent = '我';
+      nameTd.append(me);
+    }
+
+    const ratingTd = document.createElement('td');
+    ratingTd.className = 'text-right sr-lb-rating';
+    ratingTd.textContent = row.rating;
+
+    const gamesTd = document.createElement('td');
+    gamesTd.className = 'text-right';
+    gamesTd.textContent = row.games || 0;
+
+    const rateTd = document.createElement('td');
+    rateTd.className = 'text-right';
+    rateTd.textContent = row.games ? `${Math.round((row.wins / row.games) * 100)}%` : '—';
+
+    tr.append(rankTd, nameTd, ratingTd, gamesTd, rateTd);
+    frag.append(tr);
+  });
+  els.leaderboardBody.replaceChildren(frag);
 }
 
 async function loadMyRole() {
@@ -2251,6 +2338,10 @@ els.codeInput.addEventListener('input', () => {
   els.codeInput.value = els.codeInput.value.replace(/\D/g, '').slice(0, 6);
 });
 
+els.nameInput.addEventListener('input', () => {
+  if (leaderboardData.length) renderLeaderboard();
+});
+
 function guardClient() {
   if (client) return true;
   toast('服务器还没配置好，稍等主人填一下地址');
@@ -2306,6 +2397,7 @@ async function boot() {
   }
 
   setStatus('服务器已连接 · 选好板子创建房间');
+  loadLeaderboard();
   try {
     await restoreSession();
   } catch {
