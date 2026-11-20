@@ -247,6 +247,13 @@ body {
   line-height: 1.5;
 }
 
+.sr-appoint .sr-rolepick {
+  height: auto;
+  max-width: 11em;
+  padding: 0.05rem 0.3rem;
+  font-size: 72%;
+}
+
 .sr-seat.sr-picked {
   border-color: #dc3545;
   box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.3);

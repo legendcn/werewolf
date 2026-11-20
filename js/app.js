@@ -231,6 +231,8 @@ let leaderboardData = [];
 let submitted = new Set();
 let pick = null;
 let kickAsked = null;
+let appointId = null;
+let lobbyRoles = new Map();
 let selfExited = false;
 let botBusy = false;
 let preSpeech = { day: 0, msgs: [] };
@@ -835,6 +837,97 @@ async function kickMember(member) {
   await loadMembers();
 }
 
+function rolePoolOf(mode) {
+  const pool = new Map();
+  mode.roles.forEach((role) => pool.set(role, (pool.get(role) || 0) + 1));
+  return pool;
+}
+
+function rolesUsedByOthers(memberId) {
+  const used = new Map();
+  lobbyRoles.forEach((role, ownerId) => {
+    if (ownerId !== memberId && role) used.set(role, (used.get(role) || 0) + 1);
+  });
+  return used;
+}
+
+async function loadLobbyRoles() {
+  if (!session || g || !isOwnerAccount()) return;
+  const { data, error } = await client
+    .from('players')
+    .select('id, role')
+    .eq('room_code', session.code);
+  if (error || !session || g) return;
+  lobbyRoles = new Map((data || []).map((row) => [row.id, row.role || null]));
+}
+
+async function appointRole(member, role) {
+  if (!session || g || !isOwnerAccount() || !member) return;
+  appointId = null;
+  if (role) {
+    const pool = rolePoolOf(currentMode());
+    if (!pool.has(role)) {
+      toast('这个板子里没有这个角色');
+      renderRoom();
+      return;
+    }
+    const used = rolesUsedByOthers(member.id);
+    if ((used.get(role) || 0) >= pool.get(role)) {
+      toast(`「${ROLES[role]?.name || role}」的名额已经钦定完了`);
+      renderRoom();
+      return;
+    }
+  }
+  const { error } = await client.from('players').update({ role: role || null }).eq('id', member.id);
+  if (error) {
+    toast(friendlyError(error));
+    renderRoom();
+    return;
+  }
+  lobbyRoles.set(member.id, role);
+  toast(role ? `已钦定 ${member.name} 为「${ROLES[role]?.name || role}」` : `已取消 ${member.name} 的钦定`);
+  renderRoom();
+}
+
+function appointControls(member, mode) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sr-kick sr-appoint';
+  const fixed = lobbyRoles.get(member.id) || null;
+  if (appointId !== member.id) {
+    wrap.append(makeBtn(fixed ? '改钦定' : '钦定', 'btn-outline-dark', () => {
+      appointId = member.id;
+      renderRoom();
+    }));
+    return wrap;
+  }
+  const select = document.createElement('select');
+  select.className = 'form-control form-control-sm sr-rolepick';
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = '不钦定（随机）';
+  select.append(blank);
+  const pool = rolePoolOf(mode);
+  const used = rolesUsedByOthers(member.id);
+  const seen = new Set();
+  mode.roles.forEach((role) => {
+    if (seen.has(role)) return;
+    seen.add(role);
+    const left = (pool.get(role) || 0) - (used.get(role) || 0);
+    if (left <= 0 && fixed !== role) return;
+    const option = document.createElement('option');
+    option.value = role;
+    option.textContent = `${ROLES[role]?.name || role}（剩 ${left}）`;
+    select.append(option);
+  });
+  select.value = fixed || '';
+  select.addEventListener('change', () => {
+    appointRole(member, select.value || null).catch((error) => toast(friendlyError(error)));
+  });
+  const cancel = makeBtn('取消', 'btn-outline-secondary', () => { appointId = null; renderRoom(); });
+  wrap.append(select, cancel);
+  return wrap;
+}
+
 async function addBot() {
   if (!session || g || !isOwnerAccount() || botBusy) return;
   const total = currentMode().roles.length;
@@ -977,6 +1070,7 @@ function enterRoom(nextSession) {
   setConn('连接中…');
   loadRoom();
   loadMembers();
+  loadLobbyRoles().then(() => { if (session) renderRoom(); });
   subscribeRoom();
   startPolling();
 }
@@ -1088,7 +1182,11 @@ async function pollOnce() {
     await loadRoom();
     if (!session) return;
     if (pollTick % 2 === 0) await loadMembers();
-    if (!g || g.phase === 'finished') return;
+    if (!g) {
+      if (isOwnerAccount()) await loadLobbyRoles();
+      return;
+    }
+    if (g.phase === 'finished') return;
     await loadMyRole();
     if (!g) return;
     await loadChat();
@@ -2443,6 +2541,16 @@ function renderSeats(mode, inGame) {
         marks.append(bot);
       }
 
+      if (!inGame && isOwnerAccount()) {
+        const fixed = lobbyRoles.get(member.id);
+        if (fixed) {
+          const app = document.createElement('span');
+          app.className = 'badge badge-dark';
+          app.textContent = `钦定 · ${ROLES[fixed]?.name || fixed}`;
+          marks.append(app);
+        }
+      }
+
       avatar.textContent = (member.name || '?').trim().charAt(0).toUpperCase();
       name.textContent = member.name;
 
@@ -2494,6 +2602,11 @@ function renderSeats(mode, inGame) {
         tag.textContent = `被刀 ${pickers.map((row) => pad(row.seat)).join('、')}`;
         li.append(tag);
       }
+    }
+    if (!inGame && isOwnerAccount() && session && member) {
+      const controls = appointControls(member, mode);
+      controls.addEventListener('click', (event) => event.stopPropagation());
+      li.append(controls);
     }
     if (member && canKickMember(member)) {
       const wrap = document.createElement('div');
@@ -2599,6 +2712,9 @@ function renderActionPanel(mode, inGame) {
         missing > 0
       );
       els.actionArea.append(btn, note('满员后随机入座、随机发牌'));
+      if (isOwnerAccount()) {
+        els.actionArea.append(note('你是站长：可以点座位下方的「钦定」指定某人的身份（只有你看得到），其余人照常随机；座位仍然随机。'));
+      }
     } else {
       els.actionArea.append(note(missing > 0
         ? `等待房主开始（还差 ${missing} 人）`
@@ -3282,16 +3398,34 @@ async function startGame() {
   try {
     await client.from('game_actions').delete().eq('room_code', session.code);
 
-    const roles = Rules.shuffle([...mode.roles]);
-    const seats = Rules.shuffle(Array.from({ length: total }, (_, i) => i + 1));
     const roster = members.slice(0, total);
+    const { data: roleRows, error: roleError } = await client
+      .from('players')
+      .select('id, role')
+      .in('id', roster.map((row) => row.id));
+    if (roleError) throw roleError;
+    const pool = [...mode.roles];
+    const fixed = new Map();
+    (roleRows || []).forEach((row) => {
+      if (!row.role) return;
+      const at = pool.indexOf(row.role);
+      if (at >= 0) {
+        pool.splice(at, 1);
+        fixed.set(row.id, row.role);
+      }
+    });
+    const free = Rules.shuffle(pool);
+    const seats = Rules.shuffle(Array.from({ length: total }, (_, i) => i + 1));
     for (let i = 0; i < roster.length; i += 1) {
+      const role = fixed.get(roster[i].id) || free.shift();
       const { error } = await client
         .from('players')
-        .update({ role: roles[i], seat: seats[i], alive: true })
+        .update({ role, seat: seats[i], alive: true })
         .eq('id', roster[i].id);
       if (error) throw error;
     }
+    lobbyRoles = new Map();
+    appointId = null;
     await loadHostRoles();
     if (hostRoles.length !== roster.length || hostRoles.some((row) => !row.seat || !row.role)) {
       throw new Error('座位数据没写全，请重试一次');
