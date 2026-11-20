@@ -233,6 +233,20 @@ body {
   outline: none;
 }
 
+.sr-kick {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.sr-kick .btn {
+  padding: 0.05rem 0.4rem;
+  font-size: 72%;
+  line-height: 1.5;
+}
+
 .sr-seat.sr-picked {
   border-color: #dc3545;
   box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.3);

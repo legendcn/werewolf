@@ -43,6 +43,7 @@ const REASON_LABEL = {
   charm: '（被狼美人带走）',
   explode: '（被白狼王自爆带走）',
   selfboom: '（自爆出局）',
+  kick: '（被站长请离）',
 };
 
 const DEATH_SHORT = {
@@ -55,6 +56,7 @@ const DEATH_SHORT = {
   charm: '被狼美人带走',
   explode: '自爆带走',
   selfboom: '自爆出局',
+  kick: '被站长请离',
 };
 
 const els = {
@@ -175,6 +177,9 @@ let ratingsKey = '';
 let leaderboardData = [];
 let submitted = new Set();
 let pick = null;
+let kickAsked = null;
+let selfExited = false;
+let botBusy = false;
 let preSpeech = { day: 0, msgs: [] };
 let preFlushing = false;
 let preFailedAt = 0;
@@ -309,12 +314,14 @@ function roleBadgeClass(role) {
 function statusLabel(status) {
   if (status === 'approved') return '已通过';
   if (status === 'rejected') return '已拒绝';
+  if (status === 'banned') return '已封禁';
   return '待审核';
 }
 
 function statusBadgeClass(status) {
   if (status === 'approved') return 'badge-success';
   if (status === 'rejected') return 'badge-secondary';
+  if (status === 'banned') return 'badge-danger';
   return 'badge-warning';
 }
 
@@ -330,6 +337,9 @@ function friendlyAuthError(error) {
     return 'Supabase 的「邮箱确认」还开着：请站长到 Authentication → Sign In / Providers → Email，把 Confirm email 关掉并保存，然后重新注册';
   }
   if (/rate limit|too many/i.test(message)) return '操作太频繁，等一分钟再试';
+  if (/is_bot|profiles_status_check/i.test(message)) {
+    return '数据库还没升级：先在 Supabase SQL Editor 运行 supabase/migration-v6.sql';
+  }
   if (/profiles|username_taken/i.test(message)) {
     return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
   }
@@ -358,7 +368,8 @@ function applyAccountUI() {
   els.refreshStatusBtn.hidden = approved;
   els.accountNote.textContent = approved
     ? ''
-    : profile.status === 'rejected' ? '账号未通过审核' : '账号待审核';
+    : profile.status === 'banned' ? '账号已被封禁'
+      : profile.status === 'rejected' ? '账号未通过审核' : '账号待审核';
   if (approved) {
     els.nameInput.value = profile.username;
     updateHomeRoomCard();
@@ -366,10 +377,13 @@ function applyAccountUI() {
   }
   updateHomeRoomCard();
   els.pendingCard.hidden = false;
-  els.pendingTitle.textContent = profile.status === 'rejected' ? '审核未通过' : '等待审核';
-  els.pendingText.textContent = profile.status === 'rejected'
-    ? '你的账号没有通过审核。如有疑问请联系站长。'
-    : '账号已注册成功，正在等待站长或管理员审核。通过后这里会自动解锁，也可以直接点「刷新状态」。';
+  els.pendingTitle.textContent = profile.status === 'banned' ? '账号已被封禁'
+    : profile.status === 'rejected' ? '审核未通过' : '等待审核';
+  els.pendingText.textContent = profile.status === 'banned'
+    ? '你的账号被站长封禁，暂时无法进入游戏。如有疑问请联系站长解封。'
+    : profile.status === 'rejected'
+      ? '你的账号没有通过审核。如有疑问请联系站长。'
+      : '账号已注册成功，正在等待站长或管理员审核。通过后这里会自动解锁，也可以直接点「刷新状态」。';
   els.pendingRefresh.hidden = profile.status !== 'pending';
 }
 
@@ -490,7 +504,12 @@ async function refreshProfileQuiet() {
     if (isAdminAccount()) loadAdmin();
   } else {
     stopPendingPoll();
-    if (data.status === 'rejected') toast('账号未通过审核');
+    if (data.status === 'banned') {
+      toast('你的账号已被封禁');
+      if (session) exitRoomLocal('你的账号已被封禁');
+    } else if (data.status === 'rejected') {
+      toast('账号未通过审核');
+    }
   }
 }
 
@@ -556,12 +575,26 @@ async function loadAdmin() {
     actTd.className = 'text-right';
     if (row.username === OWNER_NAME) {
       actTd.textContent = '—';
+    } else if (row.status === 'banned') {
+      if (isOwnerAccount()) {
+        actTd.append(makeBtn('解封', 'btn-success mr-1 mb-1', () => adminUpdate(row.id, { status: 'approved' }, `已解封 ${row.username}`)));
+      } else {
+        const tip = document.createElement('span');
+        tip.className = 'small text-muted';
+        tip.textContent = '已封禁（仅站长可解封）';
+        actTd.append(tip);
+      }
     } else {
       if (row.status !== 'approved') {
         actTd.append(makeBtn('通过', 'btn-success mr-1 mb-1', () => adminUpdate(row.id, { status: 'approved' }, `已通过 ${row.username}`)));
       }
       if (row.status !== 'rejected') {
         actTd.append(makeBtn('拒绝', 'btn-outline-danger mr-1 mb-1', () => adminUpdate(row.id, { status: 'rejected' }, `已拒绝 ${row.username}`)));
+      }
+      const mayBan = row.status === 'approved'
+        && (isOwnerAccount() ? row.role !== 'owner' : row.role === 'member');
+      if (mayBan) {
+        actTd.append(makeBtn('封禁', 'btn-danger mr-1 mb-1', () => adminUpdate(row.id, { status: 'banned' }, `已封禁 ${row.username}`)));
       }
       if (row.status === 'approved' && isOwnerAccount()) {
         if (row.role === 'admin') {
@@ -647,6 +680,80 @@ function makeBtn(label, cls, onClick, disabled = false) {
   btn.disabled = disabled;
   if (onClick) btn.addEventListener('click', onClick);
   return btn;
+}
+
+function canKickMember(member) {
+  if (!isOwnerAccount() || !session) return false;
+  if (!member || member.id === session.playerId) return false;
+  if (g && g.phase === 'finished') return false;
+  if (g && g.phase !== 'finished' && member.id === members[0]?.id) return false;
+  return true;
+}
+
+async function kickMember(member) {
+  if (!session || !isOwnerAccount() || !member) return;
+  kickAsked = null;
+  if (g && g.phase !== 'finished') {
+    if (!member.seat) {
+      toast('这名玩家还没分到座位');
+      renderRoom();
+      return;
+    }
+    const { error } = await client.from('game_actions').insert({
+      room_code: session.code,
+      day: g.day,
+      step: 'kick',
+      player_id: session.playerId,
+      target_seat: member.seat,
+      payload: { kick: true },
+    });
+    if (error) {
+      toast(friendlyError(error));
+      renderRoom();
+      return;
+    }
+    toast(`已请求踢出 ${member.name}，等房主结算`);
+    renderRoom();
+    if (isHost()) setTimeout(hostTick, 200);
+    return;
+  }
+  const { error } = await client.from('players').delete().eq('id', member.id);
+  if (error) {
+    toast(friendlyError(error));
+    renderRoom();
+    return;
+  }
+  toast(`已把 ${member.name} 请出房间`);
+  await loadMembers();
+}
+
+async function addBot() {
+  if (!session || g || !isOwnerAccount() || botBusy) return;
+  const total = currentMode().roles.length;
+  if (members.length >= total) {
+    toast('房间已经满员');
+    return;
+  }
+  botBusy = true;
+  try {
+    const names = new Set(members.map((m) => m.name));
+    let n = 1;
+    while (names.has(`人机${n}`)) n += 1;
+    const { error } = await client.from('players').insert({ room_code: session.code, name: `人机${n}`, is_bot: true });
+    if (error) {
+      toast(friendlyError(error));
+      return;
+    }
+    toast(`已添加人机${n}：由房主引擎代为行动，不会发言`);
+    await loadMembers();
+  } finally {
+    botBusy = false;
+  }
+}
+
+function isBotSeat(seat) {
+  const row = rowBySeat(seat);
+  return Boolean(row?.is_bot);
 }
 
 function fillModeSelect() {
@@ -869,6 +976,7 @@ async function pollOnce() {
   polling = true;
   try {
     pollTick += 1;
+    if (pollTick % 8 === 0) refreshProfileQuiet().catch(() => {});
     await loadRoom();
     if (!session) return;
     if (pollTick % 2 === 0) await loadMembers();
@@ -932,6 +1040,7 @@ function applyRoom(row) {
   if (nextKey !== previousKey) {
     phaseKey = nextKey;
     pick = null;
+    kickAsked = null;
     submitted = new Set();
     if (g && g.phase === 'finished') loadAllRoles();
   }
@@ -965,13 +1074,17 @@ async function loadMembers() {
   if (!session) return;
   const { data, error } = await client
     .from('players')
-    .select('id, name, joined_at, seat, alive')
+    .select('id, name, joined_at, seat, alive, is_bot')
     .eq('room_code', session.code)
     .order('joined_at', { ascending: true });
   if (error || !session) return;
   members = data || [];
+  if (members.length && !members.some((m) => m.id === session.playerId)) {
+    exitRoomLocal('你已被站长请出房间');
+    return;
+  }
   renderRoom();
-  const namesKey = [...new Set(members.map((m) => m.name))].sort().join('|');
+  const namesKey = [...new Set(members.filter((m) => !m.is_bot).map((m) => m.name))].sort().join('|');
   if (namesKey && namesKey !== ratingsKey) {
     loadRatings().then(() => { if (session) renderRoom(); });
   }
@@ -1096,7 +1209,7 @@ async function loadHostRoles() {
   if (!session) return;
   const { data, error } = await client
     .from('players')
-    .select('id, name, seat, role, alive')
+    .select('id, name, seat, role, alive, is_bot')
     .eq('room_code', session.code)
     .order('joined_at', { ascending: true });
   if (error) return;
@@ -1107,7 +1220,7 @@ async function loadAllRoles() {
   if (!session) return;
   const { data, error } = await client
     .from('players')
-    .select('id, name, seat, role, alive')
+    .select('id, name, seat, role, alive, is_bot')
     .eq('room_code', session.code)
     .order('joined_at', { ascending: true });
   if (error) return;
@@ -1350,6 +1463,10 @@ function renderChat() {
 }
 
 function renderRoom() {
+  if (g && myRow?.seat != null && (g.kicked || []).includes(myRow.seat)) {
+    exitRoomLocal('你已被站长请出房间');
+    return;
+  }
   const mode = currentMode();
   const total = mode.roles.length;
   const inGame = Boolean(g);
@@ -1492,12 +1609,14 @@ function renderSeats(mode, inGame) {
       if (inGame && alive && !alive.has(seat)) li.classList.add('sr-dead');
       if (inGame && currentSpeaker() === seat) li.classList.add('sr-speaking');
 
-      const rate = ratings.get(member.name);
-      if (rate) {
-        const rateTag = document.createElement('span');
-        rateTag.className = 'sr-rate';
-        rateTag.textContent = rate;
-        marks.append(rateTag);
+      if (!member.is_bot) {
+        const rate = ratings.get(member.name);
+        if (rate) {
+          const rateTag = document.createElement('span');
+          rateTag.className = 'sr-rate';
+          rateTag.textContent = rate;
+          marks.append(rateTag);
+        }
       }
 
       if (member.id === hostId) {
@@ -1505,6 +1624,13 @@ function renderSeats(mode, inGame) {
         host.className = 'badge badge-warning';
         host.textContent = '房主';
         head.append(host);
+      }
+
+      if (member.is_bot) {
+        const bot = document.createElement('span');
+        bot.className = 'badge badge-info';
+        bot.textContent = '人机';
+        marks.append(bot);
       }
 
       avatar.textContent = (member.name || '?').trim().charAt(0).toUpperCase();
@@ -1516,13 +1642,18 @@ function renderSeats(mode, inGame) {
         me.textContent = '我';
         marks.append(me);
       }
-      if (inGame && alive && !alive.has(seat)) {
+      if (inGame && g.kicked?.includes(seat)) {
+        const kicked = document.createElement('span');
+        kicked.className = 'badge badge-danger';
+        kicked.textContent = '已请离';
+        marks.append(kicked);
+      } else if (inGame && alive && !alive.has(seat)) {
         const out = document.createElement('span');
         out.className = 'badge badge-secondary';
         out.textContent = '出局';
         marks.append(out);
       }
-      if (!isPlayerOnline(member)) {
+      if (!isPlayerOnline(member) && !member.is_bot) {
         const off = document.createElement('span');
         off.className = 'badge badge-warning';
         off.textContent = '离线';
@@ -1538,6 +1669,21 @@ function renderSeats(mode, inGame) {
     }
 
     li.append(head, avatar, name, marks);
+    if (member && canKickMember(member)) {
+      const wrap = document.createElement('div');
+      wrap.className = 'sr-kick';
+      const stop = (event) => event.stopPropagation();
+      if (kickAsked === member.id) {
+        const yes = makeBtn('确认踢出', 'btn-danger', () => { kickMember(member).catch((error) => toast(friendlyError(error))); });
+        const no = makeBtn('取消', 'btn-outline-secondary', () => { kickAsked = null; renderRoom(); });
+        wrap.append(yes, no);
+      } else {
+        const btn = makeBtn('踢出', 'btn-outline-danger', () => { kickAsked = member.id; renderRoom(); });
+        wrap.append(btn);
+      }
+      wrap.addEventListener('click', stop);
+      li.append(wrap);
+    }
     frag.append(li);
   }
   els.playerList.replaceChildren(frag);
@@ -1630,6 +1776,12 @@ function renderActionPanel(mode, inGame) {
       els.actionArea.append(note(missing > 0
         ? `等待房主开始（还差 ${missing} 人）`
         : '人齐了，等待房主点「开始游戏」'));
+    }
+    if (isOwnerAccount() && missing > 0) {
+      els.actionArea.append(makeBtn('添加人机（占位）', 'btn-outline-primary', () => {
+        addBot().catch((error) => toast(friendlyError(error)));
+      }));
+      els.actionArea.append(note('人机由程序行动、不会发言；座位上的「踢出」可以请走玩家或人机。'));
     }
     return;
   }
@@ -2008,6 +2160,12 @@ function renderGameOver() {
     seatTd.textContent = row.seat ? pad(row.seat) : '—';
     const nameTd = document.createElement('td');
     nameTd.textContent = row.name || '';
+    if (row.is_bot) {
+      const bot = document.createElement('span');
+      bot.className = 'badge badge-info ml-2';
+      bot.textContent = '人机';
+      nameTd.append(bot);
+    }
     const roleTd = document.createElement('td');
     roleTd.className = 'sr-role-tagcell';
     const role = ROLES[row.role];
@@ -2022,7 +2180,7 @@ function renderGameOver() {
 
     const lastDeath = (g.deaths || []).filter((death) => death.seat === row.seat).slice(-1)[0];
     const death = item?.death || lastDeath || null;
-    const win = item ? item.win : null;
+    const win = item ? item.win : (row.is_bot ? didPlayerWin(row) : null);
     const resultTd = document.createElement('td');
     if (win == null) {
       resultTd.textContent = '—';
@@ -2047,7 +2205,10 @@ function renderGameOver() {
 
     const ratingTd = document.createElement('td');
     const current = ratings.get(row.name);
-    if (item) {
+    if (row.is_bot) {
+      ratingTd.className = 'text-muted';
+      ratingTd.textContent = '人机不计分';
+    } else if (item) {
       ratingTd.className = item.delta >= 0 ? 'sr-delta-up' : 'sr-delta-down';
       ratingTd.textContent = `${item.before} → ${item.after}（${item.delta >= 0 ? '+' : ''}${item.delta}）`;
     } else {
@@ -2188,6 +2349,7 @@ async function startGame() {
       speechOrder: null,
       speechIndex: 0,
       deaths: [],
+      kicked: [],
       log: [{ day: 1, kind: 'system', text: `板子：${mode.name}，共 ${total} 人` }],
       winner: null,
       winReason: '',
@@ -2295,9 +2457,11 @@ async function hostTick() {
   hostBusy = true;
   try {
     if (!hostRoles.length) await loadHostRoles();
-    const actions = await fetchActions(g.day, g.step || 'day');
+    if (await processKickRequest()) return;
+    let actions = await fetchActions(g.day, g.step || 'day');
     const now = Date.now();
     if (g.phase === 'night') {
+      if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
       if (allActed(g.step, actions) || now >= g.deadline) {
         // 超时结算前再取一次，避免女巫/预言家在最后一刻提交的动作被漏掉
         const finalActions = now >= g.deadline ? await fetchActions(g.day, g.step) : actions;
@@ -2313,6 +2477,15 @@ async function hostTick() {
         await startVote();
         return;
       }
+      if (!isAliveSeat(speaker)) {
+        await advanceSpeech();
+        return;
+      }
+      if (isBotSeat(speaker)) {
+        g.log.push({ day: g.day, kind: 'system', text: `${pad(speaker)} 号（人机）不发言，跳过` });
+        await advanceSpeech();
+        return;
+      }
       if (!isSeatOnline(speaker)) {
         g.log.push({ day: g.day, kind: 'system', text: `${pad(speaker)} 号离线，跳过发言` });
         await advanceSpeech();
@@ -2324,6 +2497,7 @@ async function hostTick() {
       );
       if (ended || now >= g.deadline) await advanceSpeech();
     } else if (g.phase === 'vote' || g.phase === 'runoff') {
+      if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
       const boom = findExplodeAction(actions);
       if (boom) {
         await resolveExplode(boom);
@@ -2331,6 +2505,7 @@ async function hostTick() {
       }
       if (allActed(g.step, actions) || now >= g.deadline) await resolveVote(actions);
     } else if (g.phase === 'hunter') {
+      if (await fillBotActions('hunter', actions)) actions = await fetchActions(g.day, 'hunter');
       if (allActed('hunter', actions) || now >= g.deadline) await resolveHunter(actions);
     }
   } catch (error) {
@@ -2338,6 +2513,130 @@ async function hostTick() {
   } finally {
     hostBusy = false;
   }
+}
+
+// ---------- 站长踢人与人机 ----------
+
+async function processKickRequest() {
+  if (!g || !g.kicked) return false;
+  const rows = await fetchActions(g.day, 'kick');
+  const request = rows.find((row) => {
+    if (!row.payload?.kick) return false;
+    const kicker = rowBySeat(row.seat);
+    if (!kicker || kicker.name !== OWNER_NAME) return false;
+    const target = Number(row.target);
+    return target > 0 && target !== row.seat && !g.kicked.includes(target);
+  });
+  if (!request) return false;
+  await resolveKick(request);
+  return true;
+}
+
+async function resolveKick(action) {
+  const target = Number(action.target);
+  const row = rowBySeat(target);
+  if (!row || g.kicked.includes(target)) return;
+  g.kicked.push(target);
+  g.log.push({ day: g.day, kind: 'system', text: `站长把 ${pad(target)} 号请出了房间` });
+  if (!isAliveSeat(target)) {
+    await saveGame();
+    renderRoom();
+    return;
+  }
+  const deaths = Rules.expandDeaths([{ seat: target, reason: 'kick' }], {
+    alive: aliveSet(),
+    lovers: g.lovers,
+    wolfbeautySeat: roleSeat('wolfbeauty'),
+    charmTarget: g.charmTarget,
+  });
+  const outcome = await applyDeaths(deaths, 'day');
+  if (outcome === 'continue') await saveGame();
+  renderRoom();
+}
+
+function randomOf(list) {
+  return list && list.length ? list[Math.floor(Math.random() * list.length)] : null;
+}
+
+function botNightChoice(step, seat, role) {
+  const others = g.aliveSeats.filter((s) => s !== seat);
+  if (step === 'thief') return { target: null, payload: { card: Math.random() < 0.5 ? 0 : 1 } };
+  if (step === 'cupid') {
+    const a = randomOf(g.aliveSeats);
+    const rest = g.aliveSeats.filter((s) => s !== a);
+    const b = randomOf(rest);
+    return { target: null, payload: a != null && b != null ? { a, b } : {} };
+  }
+  if (step === 'guard') {
+    const pool = others.filter((s) => s !== g.lastGuard);
+    return { target: randomOf(pool), payload: {} };
+  }
+  if (step === 'wolves') {
+    const good = g.aliveSeats.filter((s) => !g.teams.wolves.includes(s));
+    return { target: randomOf(good.length ? good : g.aliveSeats), payload: {} };
+  }
+  if (step === 'wolfbeauty') {
+    const pool = others.filter((s) => s !== g.lastCharm);
+    return { target: randomOf(pool), payload: {} };
+  }
+  if (step === 'witch') {
+    if (g.kill != null && g.potions.save && Math.random() < 0.5) {
+      return { target: null, payload: { save: true } };
+    }
+    if (g.potions.poison && Math.random() < 0.3) {
+      const target = randomOf(others);
+      if (target != null) return { target, payload: { poison: target } };
+    }
+    return { target: null, payload: {} };
+  }
+  if (step === 'seer') {
+    const checked = new Set((g.checks || []).filter((c) => c.seat === seat).map((c) => c.target));
+    const fresh = others.filter((s) => !checked.has(s));
+    return { target: randomOf(fresh.length ? fresh : others), payload: {} };
+  }
+  return null;
+}
+
+function botVoteChoice(step, seat) {
+  let pool = g.aliveSeats.filter((s) => s !== seat);
+  if (step === 'runoff' && g.runoffSeats) pool = pool.filter((s) => g.runoffSeats.includes(s));
+  const target = randomOf(pool);
+  return { target: target ?? -1, payload: {} };
+}
+
+function botHunterChoice(seat) {
+  if (Math.random() < 0.6) {
+    const target = randomOf(g.aliveSeats.filter((s) => s !== seat));
+    if (target != null) return { target, payload: {} };
+  }
+  return { target: null, payload: {} };
+}
+
+async function fillBotActions(step, actions) {
+  const expected = expectedSeats(step);
+  if (!expected.length) return false;
+  const acted = new Set(actions.map((a) => a.seat));
+  let added = false;
+  for (const seat of expected) {
+    if (acted.has(seat) || !isBotSeat(seat)) continue;
+    const row = rowBySeat(seat);
+    if (!row) continue;
+    let choice;
+    if (step === 'hunter') choice = botHunterChoice(seat);
+    else if (step === 'vote' || step === 'runoff') choice = botVoteChoice(step, seat);
+    else choice = botNightChoice(step, seat, row.role);
+    if (!choice) continue;
+    const { error } = await client.from('game_actions').insert({
+      room_code: session.code,
+      day: g.day,
+      step,
+      player_id: row.id,
+      target_seat: choice.target ?? null,
+      payload: choice.payload || {},
+    });
+    if (!error) added = true;
+  }
+  return added;
 }
 
 async function resolveNightStep(actions) {
@@ -2475,7 +2774,7 @@ async function applyDeaths(deaths, when) {
 
   const hunterDeath = deaths.find((death) => {
     const row = rowBySeat(death.seat);
-    return row?.role === 'hunter' && death.reason !== 'poison' && death.reason !== 'explode';
+    return row?.role === 'hunter' && death.reason !== 'poison' && death.reason !== 'explode' && death.reason !== 'kick';
   });
   if (hunterDeath && !g.hunterUsed) {
     g.hunterUsed = true;
@@ -2529,7 +2828,9 @@ function didPlayerWin(row) {
 
 async function applyRatings() {
   if (!isHost() || !g || g.ratingApplied || !hostRoles.length) return;
-  const names = [...new Set(hostRoles.map((row) => row.name))];
+  const humans = hostRoles.filter((row) => !row.is_bot);
+  if (!humans.length) return;
+  const names = [...new Set(humans.map((row) => row.name))];
   const { data, error } = await client
     .from('ratings')
     .select('name, rating, games, wins')
@@ -2539,7 +2840,7 @@ async function applyRatings() {
     return;
   }
   const base = new Map((data || []).map((row) => [row.name, row]));
-  const entries = hostRoles.map((row) => {
+  const entries = humans.map((row) => {
     const old = base.get(row.name) || { rating: 1500, games: 0, wins: 0 };
     return {
       seat: row.seat,
@@ -2631,7 +2932,8 @@ async function startDawn() {
 async function startDay() {
   g.phase = 'day';
   g.step = 'day';
-  const alive = g.aliveSeats.slice().sort((a, b) => a - b);
+  const alive = g.aliveSeats.filter((s) => !isBotSeat(s)).sort((a, b) => a - b);
+  const hasBots = g.aliveSeats.some((s) => isBotSeat(s));
   const startIndex = alive.length ? Math.floor(Math.random() * alive.length) : 0;
   g.speechOrder = alive.slice(startIndex).concat(alive.slice(0, startIndex));
   g.speechIndex = 0;
@@ -2639,7 +2941,7 @@ async function startDay() {
   g.log.push({
     day: g.day,
     kind: 'system',
-    text: `第 ${g.day} 天讨论开始，发言顺序：${g.speechOrder.map(pad).join(' → ') || '无'}（每人 ${Math.round(DUR.speech / 1000)} 秒）`,
+    text: `第 ${g.day} 天讨论开始，发言顺序：${g.speechOrder.map(pad).join(' → ') || '无'}（每人 ${Math.round(DUR.speech / 1000)} 秒${hasBots ? '，人机不发言' : ''}）`,
   });
   if (!g.speechOrder.length) {
     await startVote();
@@ -2886,6 +3188,32 @@ async function saveGame() {
   if (g.phase !== 'finished') manageHost();
 }
 
+function exitRoomLocal(message) {
+  if (selfExited) return;
+  selfExited = true;
+  clearPreSpeech();
+  session = null;
+  stopPolling();
+  stopHost();
+  if (channel) {
+    channel.unsubscribe();
+    channel = null;
+  }
+  localStorage.removeItem(SESSION_KEY);
+  room = null;
+  members = [];
+  myRow = null;
+  g = null;
+  hostRoles = [];
+  allRoles = [];
+  pick = null;
+  kickAsked = null;
+  showHome();
+  setStatus(message);
+  toast(message);
+  setTimeout(() => { selfExited = false; }, 2000);
+}
+
 async function leaveRoom() {
   if (g && g.phase !== 'finished' && isHost()) {
     toast('房主离开会中断整局游戏，请等本局结束');
@@ -2918,7 +3246,12 @@ async function replayGame() {
   busy = true;
   try {
     await client.from('game_actions').delete().eq('room_code', session.code);
+    const kickedSeats = g.kicked || [];
     for (const member of members) {
+      if (member.seat && kickedSeats.includes(member.seat)) {
+        await client.from('players').delete().eq('id', member.id);
+        continue;
+      }
       const { error } = await client
         .from('players')
         .update({ role: null, seat: null, alive: true })
@@ -2947,6 +3280,9 @@ async function replayGame() {
 
 function friendlyError(error) {
   const message = String(error?.message || error || '未知错误');
+  if (/is_bot|profiles_status_check/i.test(message)) {
+    return '数据库还没升级：先在 Supabase SQL Editor 运行 supabase/migration-v6.sql';
+  }
   if (/profiles|username_taken/i.test(message)) {
     return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
   }

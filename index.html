@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.10.0">
+  <link rel="stylesheet" href="styles.css?v=0.11.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -143,6 +143,7 @@
                 <li><strong>自爆</strong>：普通狼人和白狼王在白天（含投票阶段）可以自爆，翻牌立即出局并跳过当天剩余流程、直接天黑；白狼王自爆还可以带走一人；<strong>狼美人不能自爆</strong>。</li>
                 <li>胜负按<strong>屠边</strong>：好人放逐所有狼人获胜；狼人杀光全部神职或全部平民获胜；人狼情侣组成第三方，需活到最后。</li>
                 <li><strong>评分</strong>：团队 Elo，初始 1500，按对手平均分计算期望胜率，同队同输赢，零和结算；6 / 9 / 12 人局 K 值分别为 32 / 28 / 24。</li>
+                <li><strong>站长特权</strong>：站长（legendcn）可以在座位旁「踢出」玩家，房间未满时可以「添加人机」占位（人机由程序行动、<strong>不会发言</strong>、不计分）；站长和管理员可以在大厅「账号管理」里封禁账号，<strong>只有站长能解封</strong>，管理员不能封禁站长。</li>
               </ol>
             </div>
           </div>
@@ -182,6 +183,7 @@
                   <tr><th scope="row">评分</th><td>按账号永久保存，初始 1500</td></tr>
                   <tr><th scope="row">网络</th><td>大陆访问需加速器</td></tr>
                   <tr><th scope="row">掉线</th><td>离线玩家的夜晚行动、发言自动跳过，投票按弃权；回来刷新即可继续</td></tr>
+                  <tr><th scope="row">人机</th><td>站长可添加，由程序行动、不会发言、不参与评分；站长可以把座位上的玩家踢出</td></tr>
                   <tr><th scope="row">多标签</th><td>会被视为同一人，测试请用无痕窗口</td></tr>
                 </tbody>
               </table>
@@ -310,15 +312,15 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.10.0 · 60 秒发言 / 提前打字 / 狼人自爆 / 女巫 60 秒用药 / 账号登录 / 边玩边审核 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.11.0 · 60 秒发言 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.10.0"></script>
-  <script src="js/modes.js?v=0.10.0"></script>
-  <script src="js/rules.js?v=0.10.0"></script>
-  <script src="js/app.js?v=0.10.0"></script>
+  <script src="js/config.js?v=0.11.0"></script>
+  <script src="js/modes.js?v=0.11.0"></script>
+  <script src="js/rules.js?v=0.11.0"></script>
+  <script src="js/app.js?v=0.11.0"></script>
 </body>
 </html>
