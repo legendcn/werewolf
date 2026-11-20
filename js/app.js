@@ -291,6 +291,9 @@ function friendlyAuthError(error) {
   if (/Email not confirmed/i.test(message)) {
     return '注册需要邮箱确认：请站长先在 Supabase 关闭 Confirm email，再删掉这个账号重新注册';
   }
+  if (/Email address .* is invalid/i.test(message)) {
+    return 'Supabase 的「邮箱确认」还开着：请站长到 Authentication → Sign In / Providers → Email，把 Confirm email 关掉并保存，然后重新注册';
+  }
   if (/rate limit|too many/i.test(message)) return '操作太频繁，等一分钟再试';
   if (/profiles|username_taken/i.test(message)) {
     return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
