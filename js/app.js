@@ -71,6 +71,7 @@ const els = {
   accountName: document.querySelector('#accountName'),
   accountRole: document.querySelector('#accountRole'),
   accountNote: document.querySelector('#accountNote'),
+  authStatus: document.querySelector('#authStatus'),
   logoutBtn: document.querySelector('#logoutBtn'),
   refreshStatusBtn: document.querySelector('#refreshStatus'),
   pendingCard: document.querySelector('#pendingCard'),
@@ -191,6 +192,11 @@ function pad(seat) {
 
 function setStatus(text) {
   els.status.textContent = text;
+}
+
+function setAuthNote(text) {
+  els.authStatus.textContent = text || '';
+  els.authStatus.hidden = !text;
 }
 
 function setConn(text, live = false) {
@@ -360,6 +366,7 @@ async function afterApproved() {
   els.loginPass.value = '';
   els.regPass.value = '';
   els.regPass2.value = '';
+  setAuthNote('');
   setStatus(`已登录：${profile.username}（${roleLabel(profile.role)}）`);
   loadLeaderboard();
   try {
@@ -2789,15 +2796,19 @@ els.loginForm.addEventListener('submit', async (event) => {
   }
   authBusy = true;
   setStatus('登录中…');
+  setAuthNote('登录中…');
   try {
     const email = await emailFor(name);
     const { error } = await client.auth.signInWithPassword({ email, password: pass });
     if (error) throw error;
     localStorage.setItem(NAME_KEY, name);
+    setAuthNote('');
     await fetchProfileAndRoute();
   } catch (error) {
-    setStatus('登录失败 · 检查用户名和密码');
-    toast(friendlyAuthError(error));
+    const reason = friendlyAuthError(error);
+    setStatus(`登录失败 · ${reason}`);
+    setAuthNote(`登录失败：${reason}`);
+    toast(reason);
   } finally {
     authBusy = false;
   }
@@ -2823,6 +2834,7 @@ els.registerForm.addEventListener('submit', async (event) => {
   }
   authBusy = true;
   setStatus('注册中…');
+  setAuthNote('注册中…');
   try {
     const email = await emailFor(name);
     const { data: taken, error: takenError } = await client.rpc('username_taken', { name });
@@ -2844,8 +2856,10 @@ els.registerForm.addEventListener('submit', async (event) => {
     await fetchProfileAndRoute();
     toast(name === OWNER_NAME ? '站长账号已创建' : '注册成功，等待站长或管理员审核');
   } catch (error) {
-    setStatus('注册失败 · 请检查后重试');
-    toast(friendlyAuthError(error));
+    const reason = friendlyAuthError(error);
+    setStatus(`注册失败 · ${reason}`);
+    setAuthNote(`注册失败：${reason}`);
+    toast(reason);
   } finally {
     authBusy = false;
   }
@@ -2857,7 +2871,9 @@ async function manualRefreshAccount() {
   try {
     await fetchProfileAndRoute();
   } catch (error) {
-    toast(friendlyAuthError(error));
+    const reason = friendlyAuthError(error);
+    setAuthNote(reason);
+    toast(reason);
   } finally {
     authBusy = false;
   }
@@ -2881,6 +2897,7 @@ els.logoutBtn.addEventListener('click', async () => {
     els.loginForm.reset();
     els.registerForm.reset();
     setStatus('已退出登录 · 请重新登录');
+    setAuthNote('已退出登录，请重新登录');
   } catch (error) {
     toast(friendlyError(error));
   } finally {
