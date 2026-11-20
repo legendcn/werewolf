@@ -10,7 +10,7 @@ const DAWN_MS = 6000;
 const REASON_LABEL = {
   wolf: '（被狼人杀害）',
   poison: '（被女巫毒杀）',
-  vote: '（被投票放逐）',
+  vote: '（放逐）',
   hunter: '（被猎人带走）',
   duel: '（决斗出局）',
   lover: '（殉情）',
@@ -522,7 +522,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     g.log.push({
       day: g.day,
       kind: 'death',
-      text: `${pad(death.seat)} 号出局${REASON_LABEL[death.reason] || ''}`,
+      text: `${pad(death.seat)} 号出局${when === 'night' ? '' : REASON_LABEL[death.reason] || ''}`,
     });
     rowBySeat(death.seat).alive = false;
   }
@@ -921,11 +921,14 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     if (reveal) g.hunterRevealed = true;
 
     if (target && isAliveSeat(target)) {
-      g.log.push({
-        day: g.day,
-        kind: 'death',
-        text: `${pad(seat)} 号翻开猎人牌，开枪带走 ${pad(target)} 号`,
-      });
+      // 夜间死因不公开：夜猎开枪不播报翻牌/带走，只公布出局座位。
+      if (from !== 'night') {
+        g.log.push({
+          day: g.day,
+          kind: 'death',
+          text: `${pad(seat)} 号翻开猎人牌，开枪带走 ${pad(target)} 号`,
+        });
+      }
       const deaths = Rules.expandDeaths([{ seat: target, reason: 'hunter' }], {
         alive: aliveSet(),
         lovers: g.lovers,
@@ -933,7 +936,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
         charmTarget: g.charmTarget,
       });
       markDeaths(deaths, from === 'night' ? 'night' : 'day');
-    } else if (reveal) {
+    } else if (reveal && from !== 'night') {
       g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号翻开猎人牌，没有开枪` });
     }
 

@@ -50,7 +50,7 @@ const STEP_LABEL = {
 const DEATH_SHORT = {
   wolf: '被狼刀',
   poison: '被毒杀',
-  vote: '被放逐',
+  vote: '放逐',
   hunter: '被猎人带走',
   duel: '决斗出局',
   lover: '殉情',
