@@ -7,7 +7,7 @@ export function speechOrder(seats, start, dir) {
   return cycle.slice(i).concat(cycle.slice(0, i));
 }
 
-export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnline, tallyVotes, resume, openConfirm }) {
+export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnline, tallyVotes, resume, openConfirm, announcePending }) {
   const log = (text) => state().log.push({ day: state().day, kind: 'system', text });
   function enter(phase, step = phase) {
     state().phase = phase;
@@ -32,7 +32,9 @@ export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnlin
     g.sheriffDone = true;
     g.runoffSeats = null;
     log(seat == null ? '本局没有选出警长，警徽流失' : `${seat} 号当选警长，放逐票算 1.5 票`);
-    beginDiscussion();
+    // 首日先公布首夜死讯、确认与遗言、警徽移交，再由最终持徽者选发言方向。
+    if (g.day === 1 && g.nightPending) announcePending('discussion');
+    else beginDiscussion();
   }
   function expected(step) {
     const g = state();
@@ -156,5 +158,5 @@ export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnlin
     g.sceneResume = next;
     advance();
   }
-  return { sunrise, expected, resolve, death, afterDeaths };
+  return { sunrise, beginDiscussion, expected, resolve, death, afterDeaths };
 }

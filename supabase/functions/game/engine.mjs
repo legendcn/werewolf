@@ -34,7 +34,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
   const pad = (seat) => String(seat).padStart(2, '0');
   const civic = civicScenes(() => g, {
     enterStep, startDay, isBotSeat, isSeatOnline, tallyVotes: Rules.tallyVotes, resume,
-    openConfirm: openConfirmation,
+    openConfirm: openConfirmation, announcePending,
   });
   function fetchActions(day, step) {
     const latest = new Map();
@@ -623,6 +623,11 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
   }
 
   function finishGame(winner, reason) {
+    // 终局前必须公布仍被保密的首夜死讯，否则公开存活名单与回放会漏掉这些死者。
+    if (g.nightPending) {
+      for (const d of g.nightPending) announceDeath(d, 'night');
+      delete g.nightPending;
+    }
     clearScenes();
     g.phase = 'finished';
     g.step = 'finished';
@@ -945,6 +950,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       if (phase === 'night') g.stepStart = (next.stepStart ?? deadline - TURN_MS) + paused;
     } else if (next === 'dawn') startDawn();
     else if (next === 'day') startDay();
+    else if (next === 'discussion') civic.beginDiscussion();
     else startNightInternal(false);
   }
 
