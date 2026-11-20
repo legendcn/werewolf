@@ -49,6 +49,18 @@ for (const mode of MODES) {
   });
 }
 
+test('6 人新手局不设警长：全程无竞选阶段，标准局仍有', () => {
+  for (let i = 0; i < 10; i++) {
+    const six = playBotGame(MODES.find(m => m.id === 'newbie6'));
+    assert.equal(six.g.sheriff, null, '6 人局不应产生警长');
+    assert.equal(six.g.sheriffDone, true);
+    assert.ok(!six.seenPhases.has('sheriff'), '6 人局不应进入警长竞选');
+    assert.ok(!six.g.log.some(l => /警长竞选/.test(l.text)), '6 人局日志不应有竞选');
+  }
+  const nine = playBotGame(MODES.find(m => m.id === 'std9'));
+  assert.ok(nine.seenPhases.has('sheriff'), '9 人标准局应竞选警长');
+});
+
 test('Elo 零和：随机人数与阵营下胜方总加分等于败方总扣分', () => {
   for (let n = 6; n <= 16; n++) {
     for (let trial = 0; trial < 30; trial++) {

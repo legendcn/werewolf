@@ -106,7 +106,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       runoffSeats: null,
       voteHistory: [],
       sheriff: null,
-      sheriffDone: false,
+      sheriffDone: mode.sheriff === false,
       speechDir: 'cw',
       speechOrder: null,
       speechIndex: 0,
