@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { project } from '../supabase/functions/game/protocol.mjs';
+import { speechOrder } from '../supabase/functions/game/civic.mjs';
 import { game } from './referee-fixture.mjs';
 
 // 高优先回归：警上自爆直接终局时，被保密的首夜死者必须公布并留下死亡记录，
@@ -71,5 +72,35 @@ test('day-1 direction is chosen by the final badge holder after deaths/words/bad
   f.ref.tick();
   assert.equal(f.g.phase, 'day');
   assert.equal(f.g.speechDir, 'ccw', '最终持徽者的方向选择应生效');
-  assert.equal(f.g.speechOrder[0], vill.seat);
+  assert.equal(f.g.speechOrder.at(-1), vill.seat, '警长最后发言');
+  const alive = f.g.aliveSeats.slice().sort((a, b) => a - b);
+  const cycle = speechOrder(alive, vill.seat, 'ccw');
+  cycle.push(cycle.shift());
+  assert.deepEqual(f.g.speechOrder, cycle);
+});
+
+test('sheriff picks the direction but speaks last; without a sheriff the death-based start is kept', () => {
+  for (const dir of ['cw', 'ccw']) {
+    const f = game('std9');
+    const sheriff = f.roster[2];
+    Object.assign(f.g, { phase: 'order', step: 'order', sheriff: sheriff.seat, sheriffDone: true, day: 2 });
+    f.act(sheriff, 'order', null, { dir });
+    f.ref.tick();
+    assert.equal(f.g.phase, 'day');
+    assert.equal(f.g.speechDir, dir);
+    const alive = f.g.aliveSeats.slice().sort((a, b) => a - b);
+    const cycle = speechOrder(alive, sheriff.seat, dir);
+    cycle.push(cycle.shift());
+    assert.deepEqual(f.g.speechOrder, cycle, `${dir} 应从警长下家开始`);
+    assert.equal(f.g.speechOrder.at(-1), sheriff.seat, `${dir} 警长应最后发言`);
+    assert.ok(f.g.log.some((e) => e.text.includes('警长最后发言')));
+  }
+  const f = game('std9');
+  Object.assign(f.g, {
+    phase: 'order', step: 'order', sheriff: null, sheriffDone: true, day: 2,
+    deaths: [{ seat: 4, day: 2, reason: 'vote' }],
+  });
+  f.ref.tick();
+  assert.equal(f.g.phase, 'day');
+  assert.equal(f.g.speechOrder[0], 5, '无警长时从最小号死者的下家开始');
 });

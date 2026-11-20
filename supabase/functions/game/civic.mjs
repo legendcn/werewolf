@@ -86,7 +86,7 @@ export function civicScenes(state, { enterStep, startDay, isBotSeat, isSeatOnlin
       } else elect(top.length === 1 ? top[0] : null);
     } else if (step === 'order') {
       g.speechDir = valid[0]?.payload.dir === 'ccw' ? 'ccw' : 'cw';
-      if (g.sheriff != null) log(`今天${g.speechDir === 'ccw' ? '逆' : '顺'}时针发言`);
+      if (g.sheriff != null) log(`今天${g.speechDir === 'ccw' ? '逆' : '顺'}时针发言，警长最后发言`);
       startDay();
     } else if (step === 'badge') {
       const seat = valid[0]?.target;

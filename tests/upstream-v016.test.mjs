@@ -42,7 +42,8 @@ test('sheriff sets direction and casts 1.5 votes in both exile ballots', () => {
     assert.throws(() => f.act(a, 'order', null, { dir: 'ccw' }));
     f.act(leader, 'order', null, { dir: 'ccw' });
     f.ref.tick();
-    assert.deepEqual(f.g.speechOrder, Array.from({ length: 9 }, (_, i) => (leader.seat + 8 - i) % 9 + 1));
+    assert.deepEqual(f.g.speechOrder, Array.from({ length: 9 }, (_, i) => (leader.seat + 7 - i + 9) % 9 + 1));
+    assert.equal(f.g.speechOrder.at(-1), leader.seat, '警长最后发言');
     Object.assign(f.g, { phase: step, step, runoffSeats: [a.seat, b.seat] });
     for (const p of f.roster) f.act(p, step, p === leader ? a.seat : p === voter ? b.seat : -1);
     f.ref.tick();

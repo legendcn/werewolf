@@ -2602,7 +2602,7 @@ function renderOrderPanel(seat) {
     els.actionArea.append(note('已选择，等待开始发言…'));
     return;
   }
-  els.actionArea.append(note('你是警长：选择今天从自己开始顺时针还是逆时针发言。'));
+  els.actionArea.append(note('你是警长：选择今天顺时针还是逆时针发言，其他玩家从你的下家按该方向依次发言，你最后一个发言。'));
   els.actionArea.append(makeBtn('顺时针', 'btn-primary', () => act('order', null, { dir: 'cw' })));
   els.actionArea.append(makeBtn('逆时针', 'btn-primary', () => act('order', null, { dir: 'ccw' })));
 }

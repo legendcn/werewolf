@@ -675,6 +675,8 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     const start = sheriff ? g.sheriff : deaths.length ? Math.min(...deaths.map(d => d.seat)) + 1 : 1;
     g.speechDir = sheriff && g.speechDir === 'ccw' ? 'ccw' : 'cw';
     g.speechOrder = speechOrder(alive, start, g.speechDir);
+    // 警长决定发言方向，但按规则最后一个发言。
+    if (sheriff) g.speechOrder.push(g.speechOrder.shift());
     g.speechIndex = 0;
     g.deadline = g.speechOrder.length ? clock() + TURN_MS : 0;
     g.log.push({
