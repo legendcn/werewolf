@@ -614,13 +614,16 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     g.badgePending = null;
   }
 
-  function settleVictory() {
+  function settleVictory(next) {
     const win = checkWin();
-    if (win) {
-      finishGame(win.winner, win.reason);
-      return 'finished';
+    if (!win) return 'continue';
+    // A daytime confirmation can finish before the deferred first-night batch.
+    if (g.nightPending && confirmSeats(g.nightPending).length) {
+      announcePending(next);
+      return 'pending';
     }
-    return 'continue';
+    finishGame(win.winner, win.reason);
+    return 'finished';
   }
 
   function checkWin() {
@@ -943,13 +946,9 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       openConfirmation(queued, from);
       return;
     }
-    if (settleVictory() === 'finished') {
-      delete g.hunterResume;
-      return;
-    }
     const next = g.hunterResume || (from === 'night' ? 'dawn' : 'night');
     delete g.hunterResume;
-    civic.afterDeaths(next);
+    if (settleVictory(next) === 'continue') civic.afterDeaths(next);
   }
 
   function resume(next) {

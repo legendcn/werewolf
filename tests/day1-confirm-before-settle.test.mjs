@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { engine } from '../supabase/functions/game/engine.mjs';
-import { submit } from '../supabase/functions/game/protocol.mjs';
+import { project, submit } from '../supabase/functions/game/protocol.mjs';
+import { game } from './referee-fixture.mjs';
 
 // 自定义板子便于构造「首夜即可能判胜」的极端局面。
 function customGame(roles) {
@@ -60,6 +61,51 @@ test('election self-boom waits for the hunter shot, which can flip the winner', 
   assert.equal(f.g.winner, 'wolf', '猎人带走最后平民后应翻为狼人屠边胜');
   assert.ok(f.g.winReason.includes('平民'));
   assert.ok(f.g.deaths.some(d => d.seat === hunter.seat) && f.g.deaths.some(d => d.seat === vill.seat));
+});
+
+test('resolving a daytime confirmation still waits for the deferred first-night hunter', () => {
+  const f = game('qbt12');
+  const [a, b, pairedWolf, poisonedWolf] = f.roster.filter(p => p.role === 'werewolf');
+  const { role } = f;
+  const cupid = role('cupid'), hunter = role('hunter'), witch = role('witch'), lover = role('villager');
+  const leave = p => {
+    f.ref.depart(p.seat, 'leave');
+    Object.assign(p, { departed: true, online: false });
+  };
+  f.act(cupid, 'cupid', null, { a: pairedWolf.seat, b: lover.seat });
+  f.ref.tick();
+  for (const p of [a, b, cupid, role('seer')]) leave(p);
+  for (const p of [pairedWolf, poisonedWolf]) f.act(p, 'wolves', hunter.seat);
+  f.ref.tick();
+  f.act(witch, 'witch', null, { poison: poisonedWolf.seat });
+  f.ref.tick();
+  if (f.g.step === 'seer') f.ref.tick(); // The departed seer has no action.
+  assert.equal(f.g.phase, 'dawn');
+  f.at(f.g.deadline);
+  f.ref.tick();
+  assert.equal(f.g.phase, 'sheriff');
+
+  leave(pairedWolf);
+  assert.equal(f.g.lastWordsSeat, lover.seat);
+  f.act(lover, 'lastwords', null, { end: true });
+  f.ref.tick();
+  assert.equal(project(f.g, lover).step, 'deathConfirm');
+  f.act(lover, 'deathConfirm');
+  f.ref.tick();
+  assert.equal(project(f.g, null).phase, 'settling');
+  assert.equal(f.g.winner, null);
+  assert.equal(project(f.g, hunter).hunterPending, hunter.seat);
+  assert.equal(f.g.nightPending, undefined);
+
+  f.act(hunter, 'hunter', witch.seat, { reveal: true });
+  f.ref.tick();
+  assert.equal(f.g.phase, 'finished');
+  assert.equal(f.g.winner, 'wolf');
+  assert.match(f.g.winReason, /神职全部出局/);
+  assert.deepEqual(f.g.deaths.filter(d => d.seat === hunter.seat || d.seat === witch.seat), [
+    { day: 1, seat: hunter.seat, reason: 'wolf' },
+    { day: 1, seat: witch.seat, reason: 'hunter' },
+  ]);
 });
 
 // 无适格确认者时仍立即结算，不引入多余窗口。
