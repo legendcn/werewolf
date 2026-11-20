@@ -99,6 +99,44 @@ test('stale recovery failures do not replace the next account’s status',async 
   fail(new Error('late')); await pending; assert.equal(run('els.status.textContent'),'Bob');
 });
 
+test('rejoining a saved room does not fetch lobby data before or during the restore', async t => {
+  const {run,w} = await page(t);
+  const restore = Promise.withResolvers(), requests = [];
+  w.restore = restore.promise;
+  w.capture = name => requests.push(name);
+  run(`profile={id:'a',username:'Alice',status:'approved'}; restoreSession=()=>restore;
+    loadLeaderboard=()=>capture('leaderboard');loadHistory=()=>capture('history');`);
+  const pending = run('afterApproved()');
+  assert.deepEqual(requests, []);
+  run(`session={code:'123456',playerId:'p'}`);
+  restore.resolve();
+  await pending;
+  assert.deepEqual(requests, []);
+  run('showHome()');
+  assert.deepEqual(requests, ['leaderboard', 'history']);
+});
+
+test('unchanged polls preserve room controls, but presence changes with the same revision still render', async t => {
+  const {run,w} = await page(t);
+  const snapshot = {
+    code:'123456', revision:4, hostId:'p', options:{mode:'newbie6',g:null},
+    members:[{id:'p',name:'Alice',online:true}], me:{id:'p',seat:null,role:null},
+    channel:'chat',chat:[],wolfPicks:[],submitted:[],
+  };
+  w.getSnap = () => structuredClone(snapshot);
+  run(`session={code:'123456',playerId:'p'}; ratingsKey='Alice'; gameRequest=async()=>getSnap();`);
+  await run(`roomCommand('snapshot')`);
+  const seat = w.document.querySelector('#playerList li');
+  assert.ok(seat);
+  for (let i = 0; i < 10; i++) await run(`roomCommand('snapshot')`);
+  assert.strictEqual(w.document.querySelector('#playerList li'), seat);
+  snapshot.hostId = null;
+  snapshot.members[0].online = false;
+  await run(`roomCommand('snapshot')`);
+  assert.notStrictEqual(w.document.querySelector('#playerList li'), seat);
+  assert.equal(run('members[0].online'), false);
+});
+
 test('real DOM accepts a new match and rejects delayed snapshots from the old one', async (t) => {
   const { run, w } = await page(t);
   const mode = MODES[0];

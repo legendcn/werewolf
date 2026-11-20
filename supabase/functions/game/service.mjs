@@ -99,7 +99,6 @@ export async function dispatch(q, uid, cmd) {
   if (!room && ['snapshot', 'restore', 'spectate'].includes(op)) return { gone: true };
   check(room, '房间不存在');
   let rows = await q(rosterSQL, [code]);
-  const origSeat = new Map(rows.map((p) => [p.id, [p.role, p.seat, p.alive]]));
   let me = rows.find((r) => r.account_id === uid && !r.departed);
   const mode = modeFor(room.options.mode);
   check(mode, '未知板子');
@@ -139,6 +138,7 @@ export async function dispatch(q, uid, cmd) {
     me.online = true;
   }
   const before = JSON.stringify(g), wasFinished = g?.phase === 'finished';
+  const oldSeats = new Map(rows.map(({ id, role, seat, alive }) => [id, { role, seat, alive }]));
   const privileged = account.role === 'owner';
   let changed = false;
   // Never convert a failed read into an empty vote. Chat is paged separately.
@@ -207,19 +207,19 @@ export async function dispatch(q, uid, cmd) {
     );
   }
   if (g && JSON.stringify(g) !== before) {
-    // Includes deals, transformations and deaths in the same commit as the state.
-    // One batched statement instead of a per-player round trip inside the room lock.
-    const sync = rows.filter((p) => {
-      const o = origSeat.get(p.id);
-      return !o || o[0] !== p.role || o[1] !== p.seat || o[2] !== p.alive;
-    });
-    if (sync.length) {
-      const vals = sync.map((_, i) => `($${i * 4 + 1}::uuid,$${i * 4 + 2}::text,$${i * 4 + 3}::int,$${i * 4 + 4}::bool)`).join(',');
+    // The room lock protects both snapshots. Phase-only updates need no roster
+    // write; deals, transformations and deaths still commit with the game state.
+    const seats = [];
+    for (const { id, role, seat, alive } of rows) {
+      const old = oldSeats.get(id);
+      if (role !== old.role || seat !== old.seat || alive !== old.alive) seats.push({ id, role, seat, alive });
+    }
+    if (seats.length) {
       await q(
-        `update public.players p set role=v.role,seat=v.seat,alive=v.alive
-        from (values ${vals}) as v(id,role,seat,alive)
-        where p.id=v.id and (p.role,p.seat,p.alive) is distinct from (v.role,v.seat,v.alive)`,
-        sync.flatMap((p) => [p.id, p.role, p.seat, p.alive]),
+        `update public.players as p set role=v.role, seat=v.seat, alive=v.alive
+        from jsonb_to_recordset($2::text::jsonb) as v(id uuid, role text, seat int, alive boolean)
+        where p.room_code=$1 and p.id=v.id`,
+        [code, JSON.stringify(seats)],
       );
     }
     if (!wasFinished && g.phase === 'finished') {

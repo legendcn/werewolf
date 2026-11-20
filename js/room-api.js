@@ -92,10 +92,21 @@ function isSeatOnline(seat) {
   return isPlayerOnline(members.find((p) => p.seat === seat));
 }
 
-function applySnapshot(data) {
+function sameSnapshot(before, after) {
+  // Presence and the viewer's permitted fields can change at the same revision.
+  return before?.revision === after.revision && JSON.stringify(before) === JSON.stringify(after);
+}
+
+function applySnapshot(data, skipUnchanged = false) {
   if (!session || data.code !== session.code || data.revision < (room?.revision ?? -1)) return;
   if (newerSeat(session) || data.me?.id !== session.playerId) {
     exitRoomLocal('此标签页的座位已失效。刷新可恢复当前座位，或用房间码重新加入。');
+    return;
+  }
+  if (skipUnchanged && sameSnapshot(room, data)) {
+    // The clock already updates independently. Keep the existing draft timer.
+    if (pendingSpeechCount()) updateChatForm();
+    setConn('已连接 · 服务端同步中', true);
     return;
   }
   const previous = g;
@@ -169,7 +180,7 @@ async function roomCommand(op, args) {
     clearSettlementRetry();
   }
   if (data.gone) exitRoomLocal(op === 'leave' ? '已退出房间' : '你已不在该房间');
-  else applySnapshot(data);
+  else applySnapshot(data, op === 'snapshot');
 }
 async function pollOnce() {
   if (!session || document.hidden || polling || acting) return;
@@ -183,6 +194,8 @@ async function pollOnce() {
     if (polling === active) polling = null;
   }
 }
+document.addEventListener('visibilitychange', pollOnce);
+
 async function startGame() {
   if (busy) return;
   busy = true;
@@ -246,7 +259,7 @@ async function spectateLoad() {
     toast(data.gone ? '旁观的房间不存在' : '这局尚未开始或已重置');
     return;
   }
-  if (data.revision < (active.room?.revision ?? -1)) return;
+  if (data.revision < (active.room?.revision ?? -1) || sameSnapshot(active.room, data)) return;
   Object.assign(active, { room: data, g: data.options.g, members: data.members, chatRows: data.chat });
   renderSpectate();
 }
