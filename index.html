@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.7.3">
+  <link rel="stylesheet" href="styles.css?v=0.8.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -28,13 +28,73 @@
         <a class="btn btn-light btn-lg" href="#start" id="heroStart">开始游戏</a>
       </div>
 
-      <div class="card mb-4" id="start">
+      <div class="card mb-4" id="authCard">
+        <div class="card-header"><strong>账号</strong></div>
+        <div class="card-body">
+          <div id="authForms">
+            <ul class="nav nav-tabs mb-3">
+              <li class="nav-item"><button class="nav-link active" type="button" data-auth-tab="login">登录</button></li>
+              <li class="nav-item"><button class="nav-link" type="button" data-auth-tab="register">注册</button></li>
+            </ul>
+            <form id="loginForm" autocomplete="on">
+              <div class="form-row">
+                <div class="col-md-6 mb-3">
+                  <label class="small text-muted mb-1" for="loginName">用户名</label>
+                  <input id="loginName" class="form-control" maxlength="12" autocomplete="username">
+                </div>
+                <div class="col-md-6 mb-3">
+                  <label class="small text-muted mb-1" for="loginPass">密码</label>
+                  <input id="loginPass" class="form-control" type="password" maxlength="64" autocomplete="current-password">
+                </div>
+              </div>
+              <button class="btn btn-danger" type="submit">登录</button>
+              <small class="text-muted ml-2">密码由 Supabase 加密保存，站长也看不到明文。</small>
+            </form>
+            <form id="registerForm" autocomplete="on" hidden>
+              <div class="form-row">
+                <div class="col-md-4 mb-3">
+                  <label class="small text-muted mb-1" for="regName">用户名（2–12 字，注册后不可改）</label>
+                  <input id="regName" class="form-control" maxlength="12" autocomplete="username">
+                </div>
+                <div class="col-md-4 mb-3">
+                  <label class="small text-muted mb-1" for="regPass">密码（至少 6 位）</label>
+                  <input id="regPass" class="form-control" type="password" maxlength="64" autocomplete="new-password">
+                </div>
+                <div class="col-md-4 mb-3">
+                  <label class="small text-muted mb-1" for="regPass2">确认密码</label>
+                  <input id="regPass2" class="form-control" type="password" maxlength="64" autocomplete="new-password">
+                </div>
+              </div>
+              <button class="btn btn-danger" type="submit">注册</button>
+              <small class="text-muted ml-2">注册后需站长或管理员审核通过才能游玩；用户名 legendcn 为站长账号。</small>
+            </form>
+          </div>
+          <div id="accountBar" hidden>
+            <div class="d-flex flex-wrap align-items-center">
+              <div>当前账号：<strong id="accountName">–</strong> <span id="accountRole" class="badge badge-secondary">成员</span></div>
+              <button id="refreshStatus" class="btn btn-sm btn-outline-secondary ml-2" type="button" hidden>刷新状态</button>
+              <button id="logoutBtn" class="btn btn-sm btn-outline-secondary ml-auto" type="button">退出登录</button>
+            </div>
+            <div id="accountNote" class="small text-muted mt-1"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4" id="pendingCard" hidden>
+        <div class="card-body">
+          <h5 class="mb-2" id="pendingTitle">等待审核</h5>
+          <p class="mb-3" id="pendingText">账号已注册，等待站长或管理员审核。通过后会自动解锁，也可以直接刷新状态。</p>
+          <button id="pendingRefresh" class="btn btn-sm btn-primary" type="button">刷新状态</button>
+        </div>
+      </div>
+
+      <div class="card mb-4" id="start" hidden>
         <div class="card-header"><strong>开始游戏</strong></div>
         <div class="card-body">
           <div class="form-row">
             <div class="col-md-6 mb-3">
-              <label class="small text-muted mb-1" for="playerName">昵称（最多 12 字）</label>
-              <input id="playerName" class="form-control" maxlength="12" placeholder="你的昵称" autocomplete="off">
+              <label class="small text-muted mb-1" for="playerName">昵称（账号名，注册后不可修改）</label>
+              <input id="playerName" class="form-control" maxlength="12" placeholder="登录后自动填入" autocomplete="off" readonly>
             </div>
             <div class="col-md-6 mb-3">
               <label class="small text-muted mb-1" for="modeSelect">板子（创建房间时生效）</label>
@@ -66,7 +126,7 @@
             <div class="card-header"><strong>怎么玩</strong></div>
             <div class="card-body sr-rules">
               <ol class="pl-3 mb-0">
-                <li>选板子、填昵称，点「创建房间」，把 6 位房间码发给朋友；每种板子人数固定，<strong>满员后房主开牌</strong>。昵称同时是你的评分账号，同一房间内不能重名。</li>
+                <li>登录后选板子、点「创建房间」，把 6 位房间码发给朋友；每种板子人数固定，<strong>满员后房主开牌</strong>。昵称就是账号名，注册后不可改，评分也记在账号名上。</li>
                 <li>夜晚按顺序行动：盗贼换牌 → 丘比特连情侣 → 守卫守护 → 狼人刀人 → 狼美人魅惑 → 女巫用药 → 预言家查验；<strong>狼人夜里可在「狼人频道」私聊</strong>。</li>
                 <li>天亮公布出局玩家（不翻身份），存活玩家按<strong>固定顺序</strong>每人 20 秒发言，全部说完后同时投票；平票进入 PK，再平票则无人出局。</li>
                 <li>胜负按<strong>屠边</strong>：好人放逐所有狼人获胜；狼人杀光全部神职或全部平民获胜；人狼情侣组成第三方，需活到最后。</li>
@@ -103,10 +163,11 @@
             <div class="table-responsive">
               <table class="table table-sm mb-0">
                 <tbody>
+                  <tr><th scope="row">账号</th><td>注册后需站长或管理员审核；密码加密保存，站长也看不到</td></tr>
                   <tr><th scope="row">板子人数</th><td>6 / 9 / 12 人</td></tr>
                   <tr><th scope="row">房间码</th><td>6 位数字</td></tr>
                   <tr><th scope="row">房主</th><td>第一位加入者，负责开牌和判定的引擎</td></tr>
-                  <tr><th scope="row">评分</th><td>按昵称永久保存，初始 1500</td></tr>
+                  <tr><th scope="row">评分</th><td>按账号永久保存，初始 1500</td></tr>
                   <tr><th scope="row">网络</th><td>大陆访问需加速器</td></tr>
                   <tr><th scope="row">掉线</th><td>离线玩家的夜晚行动、发言自动跳过，投票按弃权；回来刷新即可继续</td></tr>
                   <tr><th scope="row">多标签</th><td>会被视为同一人，测试请用无痕窗口</td></tr>
@@ -114,6 +175,23 @@
               </table>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="card mb-4" id="adminCard" hidden>
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>账号管理</strong>
+          <button id="adminRefresh" class="btn btn-sm btn-outline-secondary" type="button">刷新</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr><th>用户名</th><th>状态</th><th>角色</th><th>注册时间</th><th class="text-right">操作</th></tr>
+            </thead>
+            <tbody id="adminBody">
+              <tr><td colspan="5" class="text-center text-muted py-3">加载中…</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -218,15 +296,15 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.7.3 · 狼人夜聊 / 顺序发言 / 掉线自动跳过 / Elo 排行榜 · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.8.0 · 账号登录 / 站长审核 / 狼人夜聊 / 顺序发言 / 掉线自动跳过 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.7.3"></script>
-  <script src="js/modes.js?v=0.7.3"></script>
-  <script src="js/rules.js?v=0.7.3"></script>
-  <script src="js/app.js?v=0.7.3"></script>
+  <script src="js/config.js?v=0.8.0"></script>
+  <script src="js/modes.js?v=0.8.0"></script>
+  <script src="js/rules.js?v=0.8.0"></script>
+  <script src="js/app.js?v=0.8.0"></script>
 </body>
 </html>

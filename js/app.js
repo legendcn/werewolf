@@ -58,6 +58,31 @@ const DEATH_SHORT = {
 const els = {
   homeView: document.querySelector('#homeView'),
   roomView: document.querySelector('#roomView'),
+  authCard: document.querySelector('#authCard'),
+  authForms: document.querySelector('#authForms'),
+  loginForm: document.querySelector('#loginForm'),
+  loginName: document.querySelector('#loginName'),
+  loginPass: document.querySelector('#loginPass'),
+  registerForm: document.querySelector('#registerForm'),
+  regName: document.querySelector('#regName'),
+  regPass: document.querySelector('#regPass'),
+  regPass2: document.querySelector('#regPass2'),
+  accountBar: document.querySelector('#accountBar'),
+  accountName: document.querySelector('#accountName'),
+  accountRole: document.querySelector('#accountRole'),
+  accountNote: document.querySelector('#accountNote'),
+  logoutBtn: document.querySelector('#logoutBtn'),
+  refreshStatusBtn: document.querySelector('#refreshStatus'),
+  pendingCard: document.querySelector('#pendingCard'),
+  pendingTitle: document.querySelector('#pendingTitle'),
+  pendingText: document.querySelector('#pendingText'),
+  pendingRefresh: document.querySelector('#pendingRefresh'),
+  adminCard: document.querySelector('#adminCard'),
+  adminBody: document.querySelector('#adminBody'),
+  adminRefresh: document.querySelector('#adminRefresh'),
+  startCard: document.querySelector('#start'),
+  leaderboardCard: document.querySelector('#leaderboard'),
+  heroStart: document.querySelector('#heroStart'),
   nameInput: document.querySelector('#playerName'),
   modeSelect: document.querySelector('#modeSelect'),
   modeHint: document.querySelector('#modeHint'),
@@ -143,6 +168,10 @@ let submitted = new Set();
 let pick = null;
 let phaseKey = '';
 let feedSeeded = false;
+let profile = null;
+let authBusy = false;
+let pendingTimer = null;
+let approvedRouted = false;
 
 let toastTimer;
 function toast(message) {
@@ -171,8 +200,8 @@ function setConn(text, live = false) {
 
 function setBusy(value) {
   busy = value;
-  els.createBtn.disabled = value;
-  els.joinBtn.disabled = value;
+  els.createBtn.disabled = value || !accountApproved();
+  els.joinBtn.disabled = value || !accountApproved();
 }
 
 function showRoom() {
@@ -183,10 +212,11 @@ function showRoom() {
 function showHome() {
   els.roomView.hidden = true;
   els.homeView.hidden = false;
-  if (client) loadLeaderboard();
+  if (client && accountApproved()) loadLeaderboard();
 }
 
 function readName() {
+  if (profile && profile.status === 'approved') return profile.username;
   const name = els.nameInput.value.trim();
   if (!name) {
     toast('先填一个昵称');
@@ -195,6 +225,321 @@ function readName() {
   }
   localStorage.setItem(NAME_KEY, name);
   return name;
+}
+
+const NAME_RE = /^[\u4e00-\u9fa5A-Za-z0-9_]{2,12}$/;
+const OWNER_NAME = 'legendcn';
+
+async function sha256Hex(text) {
+  if (!window.crypto?.subtle) throw new Error('浏览器不支持加密接口，请用 Chrome / Edge 打开');
+  const buf = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function emailFor(name) {
+  const hash = await sha256Hex(`wolf:${name.trim().toLowerCase()}`);
+  return `u_${hash.slice(0, 24)}@werewolf.local`;
+}
+
+function accountApproved() {
+  return Boolean(profile && profile.status === 'approved');
+}
+
+function isAdminAccount() {
+  return accountApproved() && (profile.role === 'owner' || profile.role === 'admin');
+}
+
+function isOwnerAccount() {
+  return accountApproved() && profile.username === OWNER_NAME;
+}
+
+function roleLabel(role) {
+  if (role === 'owner') return '站长';
+  if (role === 'admin') return '管理员';
+  return '成员';
+}
+
+function roleBadgeClass(role) {
+  if (role === 'owner') return 'badge-danger';
+  if (role === 'admin') return 'badge-info';
+  return 'badge-secondary';
+}
+
+function statusLabel(status) {
+  if (status === 'approved') return '已通过';
+  if (status === 'rejected') return '已拒绝';
+  return '待审核';
+}
+
+function statusBadgeClass(status) {
+  if (status === 'approved') return 'badge-success';
+  if (status === 'rejected') return 'badge-secondary';
+  return 'badge-warning';
+}
+
+function friendlyAuthError(error) {
+  const message = String(error?.message || error || '未知错误');
+  if (/Invalid login credentials/i.test(message)) return '用户名或密码错误';
+  if (/User already registered|already been registered/i.test(message)) return '这个用户名已经被注册了';
+  if (/Password should be at least|password.*6/i.test(message)) return '密码至少 6 位';
+  if (/Email not confirmed/i.test(message)) {
+    return '注册需要邮箱确认：请站长先在 Supabase 关闭 Confirm email，再删掉这个账号重新注册';
+  }
+  if (/rate limit|too many/i.test(message)) return '操作太频繁，等一分钟再试';
+  if (/profiles|username_taken/i.test(message)) {
+    return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
+  }
+  return friendlyError(error);
+}
+
+function applyAccountUI() {
+  const has = Boolean(profile);
+  const approved = accountApproved();
+  els.authForms.hidden = has;
+  els.accountBar.hidden = !has;
+  els.pendingCard.hidden = true;
+  els.startCard.hidden = !approved;
+  els.leaderboardCard.hidden = !approved;
+  els.adminCard.hidden = !(approved && isAdminAccount());
+  els.createBtn.disabled = busy || !approved;
+  els.joinBtn.disabled = busy || !approved;
+  if (!has) {
+    els.nameInput.value = '';
+    els.accountNote.textContent = '';
+    return;
+  }
+  els.accountName.textContent = profile.username;
+  els.accountRole.textContent = roleLabel(profile.role);
+  els.accountRole.className = `badge ${roleBadgeClass(profile.role)}`;
+  els.refreshStatusBtn.hidden = approved;
+  els.accountNote.textContent = approved
+    ? ''
+    : profile.status === 'rejected' ? '账号未通过审核' : '账号待审核';
+  if (approved) {
+    els.nameInput.value = profile.username;
+    return;
+  }
+  els.pendingCard.hidden = false;
+  els.pendingTitle.textContent = profile.status === 'rejected' ? '审核未通过' : '等待审核';
+  els.pendingText.textContent = profile.status === 'rejected'
+    ? '你的账号没有通过审核。如有疑问请联系站长。'
+    : '账号已注册成功，正在等待站长或管理员审核。通过后这里会自动解锁，也可以直接点「刷新状态」。';
+  els.pendingRefresh.hidden = profile.status !== 'pending';
+}
+
+function showAuthScreen() {
+  profile = null;
+  approvedRouted = false;
+  stopPendingPoll();
+  applyAccountUI();
+}
+
+function showAuthProblem(title, text) {
+  profile = null;
+  approvedRouted = false;
+  stopPendingPoll();
+  els.authForms.hidden = true;
+  els.accountBar.hidden = false;
+  els.accountName.textContent = '—';
+  els.accountRole.textContent = '未就绪';
+  els.accountRole.className = 'badge badge-secondary';
+  els.accountNote.textContent = '';
+  els.refreshStatusBtn.hidden = false;
+  els.startCard.hidden = true;
+  els.leaderboardCard.hidden = true;
+  els.adminCard.hidden = true;
+  els.pendingTitle.textContent = title;
+  els.pendingText.textContent = text;
+  els.pendingRefresh.hidden = false;
+  els.pendingCard.hidden = false;
+}
+
+async function afterApproved() {
+  if (approvedRouted) return;
+  approvedRouted = true;
+  els.loginPass.value = '';
+  els.regPass.value = '';
+  els.regPass2.value = '';
+  setStatus(`已登录：${profile.username}（${roleLabel(profile.role)}）`);
+  loadLeaderboard();
+  try {
+    await restoreSession();
+  } catch {
+    localStorage.removeItem(SESSION_KEY);
+  }
+}
+
+async function fetchProfileAndRoute() {
+  const { data: userData, error: userError } = await client.auth.getUser();
+  if (userError) throw userError;
+  if (!userData?.user) {
+    showAuthScreen();
+    return false;
+  }
+  const { data, error } = await client
+    .from('profiles')
+    .select('id, username, role, status')
+    .eq('id', userData.user.id)
+    .maybeSingle();
+  if (error) {
+    showAuthProblem(
+      '账号系统未就绪',
+      `读取账号资料失败：${friendlyError(error)}。请先在 Supabase SQL Editor 运行 supabase/migration-v5.sql。`
+    );
+    return false;
+  }
+  if (!data) {
+    showAuthProblem(
+      '账号资料缺失',
+      '数据库里没有你的账号资料。请先在 Supabase 运行 supabase/migration-v5.sql，或联系站长。'
+    );
+    return false;
+  }
+  const wasApproved = accountApproved();
+  profile = data;
+  applyAccountUI();
+  if (data.status === 'approved') {
+    stopPendingPoll();
+    if (!wasApproved) await afterApproved();
+    if (isAdminAccount()) loadAdmin();
+  } else if (data.status === 'pending') {
+    startPendingPoll();
+  } else {
+    stopPendingPoll();
+  }
+  return true;
+}
+
+function stopPendingPoll() {
+  if (pendingTimer) {
+    clearInterval(pendingTimer);
+    pendingTimer = null;
+  }
+}
+
+function startPendingPoll() {
+  stopPendingPoll();
+  pendingTimer = setInterval(() => {
+    refreshProfileQuiet().catch(() => {});
+  }, 15000);
+}
+
+async function refreshProfileQuiet() {
+  if (!profile || !client) return;
+  const { data, error } = await client
+    .from('profiles')
+    .select('id, username, role, status')
+    .eq('id', profile.id)
+    .maybeSingle();
+  if (error || !data) return;
+  if (data.status === profile.status && data.role === profile.role) return;
+  const wasApproved = accountApproved();
+  profile = data;
+  applyAccountUI();
+  if (data.status === 'approved') {
+    stopPendingPoll();
+    toast('审核已通过，可以开始游戏了');
+    if (!wasApproved) await afterApproved();
+    if (isAdminAccount()) loadAdmin();
+  } else {
+    stopPendingPoll();
+    if (data.status === 'rejected') toast('账号未通过审核');
+  }
+}
+
+function adminMessageRow(text, cls) {
+  const tr = document.createElement('tr');
+  const td = document.createElement('td');
+  td.colSpan = 5;
+  td.className = `text-center py-3 ${cls}`;
+  td.textContent = text;
+  tr.append(td);
+  return tr;
+}
+
+async function loadAdmin() {
+  if (!isAdminAccount()) return;
+  els.adminBody.replaceChildren(adminMessageRow('加载中…', 'text-muted'));
+  const { data, error } = await client
+    .from('profiles')
+    .select('id, username, role, status, created_at')
+    .order('created_at', { ascending: true })
+    .limit(200);
+  if (error) {
+    els.adminBody.replaceChildren(adminMessageRow(`读取失败：${friendlyError(error)}`, 'text-danger'));
+    return;
+  }
+  const rows = data || [];
+  if (!rows.length) {
+    els.adminBody.replaceChildren(adminMessageRow('还没有注册用户', 'text-muted'));
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+
+    const nameTd = document.createElement('td');
+    nameTd.textContent = row.username;
+    if (profile && row.username === profile.username) {
+      const me = document.createElement('span');
+      me.className = 'badge badge-primary ml-2';
+      me.textContent = '我';
+      nameTd.append(me);
+    }
+
+    const statusTd = document.createElement('td');
+    const statusTag = document.createElement('span');
+    statusTag.className = `badge ${statusBadgeClass(row.status)}`;
+    statusTag.textContent = statusLabel(row.status);
+    statusTd.append(statusTag);
+
+    const roleTd = document.createElement('td');
+    const roleTag = document.createElement('span');
+    roleTag.className = `badge ${roleBadgeClass(row.role)}`;
+    roleTag.textContent = roleLabel(row.role);
+    roleTd.append(roleTag);
+
+    const timeTd = document.createElement('td');
+    timeTd.className = 'small text-muted';
+    timeTd.textContent = row.created_at
+      ? new Date(row.created_at).toLocaleString('zh-CN', { hour12: false })
+      : '—';
+
+    const actTd = document.createElement('td');
+    actTd.className = 'text-right';
+    if (row.username === OWNER_NAME) {
+      actTd.textContent = '—';
+    } else {
+      if (row.status !== 'approved') {
+        actTd.append(makeBtn('通过', 'btn-success mr-1 mb-1', () => adminUpdate(row.id, { status: 'approved' }, `已通过 ${row.username}`)));
+      }
+      if (row.status !== 'rejected') {
+        actTd.append(makeBtn('拒绝', 'btn-outline-danger mr-1 mb-1', () => adminUpdate(row.id, { status: 'rejected' }, `已拒绝 ${row.username}`)));
+      }
+      if (row.status === 'approved' && isOwnerAccount()) {
+        if (row.role === 'admin') {
+          actTd.append(makeBtn('取消管理员', 'btn-outline-secondary mr-1 mb-1', () => adminUpdate(row.id, { role: 'member' }, `已取消 ${row.username} 的管理员`)));
+        } else {
+          actTd.append(makeBtn('设为管理员', 'btn-outline-primary mr-1 mb-1', () => adminUpdate(row.id, { role: 'admin' }, `${row.username} 已成为管理员`)));
+        }
+      }
+    }
+
+    tr.append(nameTd, statusTd, roleTd, timeTd, actTd);
+    frag.append(tr);
+  });
+  els.adminBody.replaceChildren(frag);
+}
+
+async function adminUpdate(id, patch, message) {
+  if (!isAdminAccount()) return;
+  const { error } = await client.from('profiles').update(patch).eq('id', id);
+  if (error) {
+    toast(friendlyError(error));
+    return;
+  }
+  toast(message);
+  await loadAdmin();
 }
 
 function randomCode() {
@@ -2301,6 +2646,9 @@ async function replayGame() {
 
 function friendlyError(error) {
   const message = String(error?.message || error || '未知错误');
+  if (/profiles|username_taken/i.test(message)) {
+    return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
+  }
   if (/fetch|network|Load failed|Failed to fetch/i.test(message)) {
     return '网络连不上服务器，检查加速器后重试';
   }
@@ -2400,8 +2748,144 @@ els.modeSelect.addEventListener('change', updateModeHint);
 
 document.querySelector('#heroStart').addEventListener('click', (event) => {
   event.preventDefault();
-  document.querySelector('#start').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!accountApproved()) {
+    els.authCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    els.loginName.focus({ preventScroll: true });
+    return;
+  }
+  els.startCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
   els.nameInput.focus({ preventScroll: true });
+});
+
+document.querySelector('.navbar a[href="#start"]').addEventListener('click', (event) => {
+  if (accountApproved()) return;
+  event.preventDefault();
+  els.authCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+els.authCard.querySelectorAll('[data-auth-tab]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.authTab;
+    els.authCard.querySelectorAll('[data-auth-tab]').forEach((item) => {
+      item.classList.toggle('active', item === btn);
+    });
+    els.loginForm.hidden = tab !== 'login';
+    els.registerForm.hidden = tab !== 'register';
+  });
+});
+
+els.loginForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (authBusy || !guardClient()) return;
+  const name = els.loginName.value.trim();
+  const pass = els.loginPass.value;
+  if (!NAME_RE.test(name)) {
+    toast('用户名是 2–12 位中文、字母、数字或下划线');
+    return;
+  }
+  if (!pass) {
+    toast('请输入密码');
+    return;
+  }
+  authBusy = true;
+  setStatus('登录中…');
+  try {
+    const email = await emailFor(name);
+    const { error } = await client.auth.signInWithPassword({ email, password: pass });
+    if (error) throw error;
+    localStorage.setItem(NAME_KEY, name);
+    await fetchProfileAndRoute();
+  } catch (error) {
+    setStatus('登录失败 · 检查用户名和密码');
+    toast(friendlyAuthError(error));
+  } finally {
+    authBusy = false;
+  }
+});
+
+els.registerForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (authBusy || !guardClient()) return;
+  const name = els.regName.value.trim();
+  const pass = els.regPass.value;
+  const pass2 = els.regPass2.value;
+  if (!NAME_RE.test(name)) {
+    toast('用户名需 2–12 位中文、字母、数字或下划线');
+    return;
+  }
+  if (pass.length < 6) {
+    toast('密码至少 6 位');
+    return;
+  }
+  if (pass !== pass2) {
+    toast('两次输入的密码不一致');
+    return;
+  }
+  authBusy = true;
+  setStatus('注册中…');
+  try {
+    const email = await emailFor(name);
+    const { data: taken, error: takenError } = await client.rpc('username_taken', { name });
+    if (takenError) throw takenError;
+    if (taken) throw new Error('这个用户名已经被注册了');
+    const { data: signData, error: signError } = await client.auth.signUp({ email, password: pass });
+    if (signError) throw signError;
+    if (!signData.session) {
+      throw new Error('注册成功但没拿到登录态：请站长先在 Supabase 关闭 Confirm email；如果这个用户名之前注册过，需要先删掉旧账号');
+    }
+    const { error: profileError } = await client
+      .from('profiles')
+      .insert({ id: signData.user.id, username: name });
+    if (profileError) {
+      await client.auth.signOut().catch(() => {});
+      throw profileError;
+    }
+    localStorage.setItem(NAME_KEY, name);
+    await fetchProfileAndRoute();
+    toast(name === OWNER_NAME ? '站长账号已创建' : '注册成功，等待站长或管理员审核');
+  } catch (error) {
+    setStatus('注册失败 · 请检查后重试');
+    toast(friendlyAuthError(error));
+  } finally {
+    authBusy = false;
+  }
+});
+
+async function manualRefreshAccount() {
+  if (!guardClient() || authBusy) return;
+  authBusy = true;
+  try {
+    await fetchProfileAndRoute();
+  } catch (error) {
+    toast(friendlyAuthError(error));
+  } finally {
+    authBusy = false;
+  }
+}
+
+els.refreshStatusBtn.addEventListener('click', manualRefreshAccount);
+els.pendingRefresh.addEventListener('click', manualRefreshAccount);
+els.adminRefresh.addEventListener('click', () => {
+  if (!isAdminAccount()) return;
+  loadAdmin();
+});
+
+els.logoutBtn.addEventListener('click', async () => {
+  if (authBusy) return;
+  authBusy = true;
+  try {
+    stopPendingPoll();
+    await client.auth.signOut();
+    localStorage.removeItem(SESSION_KEY);
+    showAuthScreen();
+    els.loginForm.reset();
+    els.registerForm.reset();
+    setStatus('已退出登录 · 请重新登录');
+  } catch (error) {
+    toast(friendlyError(error));
+  } finally {
+    authBusy = false;
+  }
 });
 
 els.codeInput.addEventListener('input', () => {
@@ -2453,7 +2937,10 @@ async function boot() {
   fillModeSelect();
 
   const savedName = localStorage.getItem(NAME_KEY);
-  if (savedName) els.nameInput.value = savedName;
+  if (savedName) {
+    els.loginName.value = savedName;
+    els.regName.value = savedName;
+  }
 
   const params = new URLSearchParams(location.search);
   const fromUrl = params.get('room');
@@ -2466,12 +2953,22 @@ async function boot() {
     return;
   }
 
-  setStatus('服务器已连接 · 选好板子创建房间');
-  loadLeaderboard();
+  setStatus('服务器已连接 · 请登录或注册');
+  client.auth.onAuthStateChange((event) => {
+    if (event === 'SIGNED_OUT') showAuthScreen();
+  });
+
   try {
-    await restoreSession();
-  } catch {
-    localStorage.removeItem(SESSION_KEY);
+    const { data } = await client.auth.getSession();
+    if (!data?.session) {
+      showAuthScreen();
+      return;
+    }
+    const ok = await fetchProfileAndRoute();
+    if (!ok) setStatus('已登录 · 账号状态异常，请查看上方提示');
+  } catch (error) {
+    showAuthScreen();
+    toast(friendlyAuthError(error));
   }
 }
 
