@@ -4,18 +4,18 @@ const { ROLES, MODES, CAMPS, modeById } = window.WOLF_MODES;
 const Rules = window.WolfRules;
 
 const DUR = {
-  thief: 30000,
-  cupid: 30000,
-  guard: 35000,
-  wolves: 45000,
-  wolfbeauty: 25000,
+  thief: 60000,
+  cupid: 60000,
+  guard: 60000,
+  wolves: 60000,
+  wolfbeauty: 60000,
   witch: 60000,
-  seer: 40000,
+  seer: 60000,
   dawn: 6000,
   speech: 60000,
-  vote: 45000,
-  runoff: 35000,
-  hunter: 30000,
+  vote: 60000,
+  runoff: 60000,
+  hunter: 60000,
 };
 
 const STEP_LABEL = {
@@ -2381,12 +2381,13 @@ function submittedHelp(step) {
 function act(step, target, payload) {
   if (!session || !g) return;
   const key = `${g.day}:${step}`;
+  const storedStep = payload && payload.explode ? 'explode' : step;
   client
     .from('game_actions')
     .insert({
       room_code: session.code,
       day: g.day,
-      step,
+      step: storedStep,
       player_id: session.playerId,
       target_seat: target ?? null,
       payload: payload || {},
@@ -3097,13 +3098,22 @@ function allActed(step, actions) {
   return expected.every((seat) => acted.has(seat) || !isSeatOnline(seat));
 }
 
+async function fetchHostActions(day, step) {
+  const rows = await fetchActions(day, step);
+  if (step !== 'explode' && (g.phase === 'day' || g.phase === 'vote' || g.phase === 'runoff')) {
+    const bombs = await fetchActions(day, 'explode');
+    bombs.forEach((bomb) => rows.push(bomb));
+  }
+  return rows;
+}
+
 async function hostTick() {
   if (!session || !isHost() || !g || !room || g.phase === 'finished' || hostBusy) return;
   hostBusy = true;
   try {
     if (!hostRoles.length) await loadHostRoles();
     if (await processKickRequest()) return;
-    let actions = await fetchActions(g.day, g.step || 'day');
+    let actions = await fetchHostActions(g.day, g.step || 'day');
     const now = Date.now();
     if (g.phase === 'night') {
       if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
@@ -3142,7 +3152,7 @@ async function hostTick() {
       );
       if (ended || now >= g.deadline) await advanceSpeech();
     } else if (g.phase === 'vote' || g.phase === 'runoff') {
-      if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
+      if (await fillBotActions(g.step, actions)) actions = await fetchHostActions(g.day, g.step);
       const boom = findExplodeAction(actions);
       if (boom) {
         await resolveExplode(boom);
@@ -3385,19 +3395,15 @@ async function finishNight() {
   g.saved = false;
   g.poison = null;
 
+  g.log.push({ day: g.day, kind: 'dawn', text: `第 ${g.day} 天 · 天亮了` });
   const outcome = await applyDeaths(deaths, 'night');
   if (outcome !== 'continue') return;
 
-  g.phase = 'dawn';
-  g.step = 'dawn';
-  g.deadline = Date.now() + DUR.dawn;
-  g.log.push({ day: g.day, kind: 'dawn', text: `第 ${g.day} 天 · 天亮了` });
-  await saveGame();
-  renderRoom();
+  await startDawn(false);
 }
 
 async function applyDeaths(deaths, when) {
-  if (!deaths.length) {
+  if (!deaths.length && when === 'night') {
     g.log.push({ day: g.day, kind: 'dawn', text: '昨夜是平安夜' });
   }
   deaths.forEach((death) => {
@@ -3625,11 +3631,11 @@ async function finishGame(winner, reason) {
   renderGameOver();
 }
 
-async function startDawn() {
+async function startDawn(logHeader = true) {
   g.phase = 'dawn';
   g.step = 'dawn';
   g.deadline = Date.now() + DUR.dawn;
-  g.log.push({ day: g.day, kind: 'dawn', text: `第 ${g.day} 天 · 天亮了` });
+  if (logHeader) g.log.push({ day: g.day, kind: 'dawn', text: `第 ${g.day} 天 · 天亮了` });
   await saveGame();
   renderRoom();
 }
@@ -3872,7 +3878,7 @@ async function resolveHunter(actions) {
     }
   }
 
-  if (from === 'night') await startDawn();
+  if (from === 'night') await startDawn(false);
   else await startNightInternal(false);
 }
 
