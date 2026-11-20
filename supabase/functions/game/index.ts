@@ -9,6 +9,17 @@ const db = postgres(Deno.env.get('GAME_DATABASE_URL') || Deno.env.get('SUPABASE_
   idle_timeout: 20,
   connect_timeout: 10,
 });
+// Projects created with the publishable-key system may not expose the legacy
+// SUPABASE_ANON_KEY; fall back to the default publishable key.
+function clientApiKey(): string {
+  const legacy = Deno.env.get('SUPABASE_ANON_KEY');
+  if (legacy) return legacy;
+  try {
+    return Object.values(JSON.parse(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS') || '{}'))[0] as string;
+  } catch {
+    return '';
+  }
+}
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
@@ -24,7 +35,7 @@ Deno.serve(async (req) => {
   if (!token?.startsWith('Bearer ')) return json({ error: '请登录' }, 401);
   try {
     const auth = await fetch(`${Deno.env.get('SUPABASE_URL')}/auth/v1/user`, {
-      headers: { Authorization: token, apikey: Deno.env.get('SUPABASE_ANON_KEY')! },
+      headers: { Authorization: token, apikey: clientApiKey() },
     });
     if (!auth.ok) {
       return json({ error: '账号验证失败' }, auth.status === 401 || auth.status === 403 ? 401 : 503);
