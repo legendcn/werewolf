@@ -2622,6 +2622,12 @@ function renderModeInfo(mode) {
   desc.textContent = mode.desc;
 
   els.modeInfo.replaceChildren(title, list, desc);
+  if (mode.play) {
+    const play = document.createElement('p');
+    play.className = 'small mb-0 mt-2';
+    play.textContent = `玩法：${mode.play}`;
+    els.modeInfo.append(play);
+  }
 }
 
 function renderGameOver() {
