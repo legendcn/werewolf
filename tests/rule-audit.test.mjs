@@ -55,13 +55,11 @@ test('identical public vote, confirmation, deadline and next phase for a village
   assert.throws(() => cover.act(swapped, 'hunter', cover.role('seer').seat, { reveal: true }));
   assert.throws(() => cover.act(cover.role('seer'), 'deathConfirm'));
   assert.throws(() => original.act(hunter, 'deathConfirm'));
-  original.at(original.g.deadline + 14000); cover.at(cover.g.deadline + 14000);
+  original.at(original.g.deadline - 14000); cover.at(cover.g.deadline - 14000);
   original.act(hunter, 'hunter', null, { reveal: false }); cover.act(swapped, 'deathConfirm');
   original.ref.tick(); cover.ref.tick();
   assert.deepEqual(publicViews(original), publicViews(cover));
   assert.equal(original.g.phase, 'night');
-  assert.equal(original.g.bank[hunter.seat], 46000);
-  assert.equal(cover.g.bank[swapped.seat], 46000);
   // A later ordinary death must not reveal that the real hunter has already passed.
   voteOut(original, original.role('villager'));
   assert.equal(project(original.g, null).phase, 'lastwords');
@@ -103,16 +101,15 @@ test('mid-speech lover death pauses the clock and a second departure does not di
   f.act(hunter, 'hunter', null, { reveal: false }); f.ref.tick();
   assert.equal(f.g.phase, 'day');
   assert.equal(f.now() - f.g.deadline, 10000);
-  f.act(speaker, 'speech', null, { turn: 0 });
-  assert.equal(f.g.bank[speaker.seat], 50000); // no charge for the 18-second pause
+  assert.equal(f.g.speechIndex, 0); // the interrupted speaker's turn resumes, not discarded
+  assert.ok(!('bank' in f.g));
 });
 
-test('night timeout and return are private, including later phases; Cupid log never claims a result', () => {
+test('night timeout advances with no bank or AFK; Cupid log never claims a result', () => {
   for (const [mode, role] of [['qbt12', 'cupid'], ['dz12', 'thief']]) {
-    const f = game(mode), owner = f.role(role), viewer = f.role('seer');
+    const f = game(mode), owner = f.role(role);
     f.at(f.g.deadline + 60000); f.ref.tick();
-    assert.deepEqual(project(f.g, owner).afk, [owner.seat]);
-    for (const me of [viewer, null]) assert.deepEqual(project(f.g, me).afk, []);
+    assert.ok(!('afk' in project(f.g, owner)) && !('bank' in f.g));
     if (role === 'cupid') {
       assert.equal(f.g.lovers, null);
       const ok = game(mode), [a, b] = ok.g.aliveSeats;
@@ -121,18 +118,7 @@ test('night timeout and return are private, including later phases; Cupid log ne
       assert.deepEqual(ok.g.log.at(-1), f.g.log.at(-1));
       assert.equal(f.g.log.at(-1).text, '丘比特行动结束');
     }
-    Object.assign(f.g, { phase: 'vote', step: 'vote' });
-    assert.deepEqual(project(f.g, viewer).afk, []);
-    f.act(owner, 'afk', null, { back: true });
-    assert.equal(f.g.bank[owner.seat], 0);
-    assert.ok(!project(f.g, null).log.some(e => /局时用完|解除挂机/.test(e.text)));
   }
-  const f = game(), p = f.role('seer');
-  Object.assign(f.g, { phase: 'day', step: 'day', speechOrder: [p.seat], speechIndex: 0 });
-  f.at(f.g.deadline + 60000); f.ref.tick();
-  assert.deepEqual(project(f.g, null).afk, [p.seat]); // public speech still has a public timeout
-  f.act(p, 'afk', null, { back: true });
-  assert.deepEqual(project(f.g, null).afk, []);
 });
 
 test('a departed wolf target is not shown, cannot be saved, and cannot consume a potion at resolution', () => {
@@ -151,18 +137,15 @@ test('a departed wolf target is not shown, cannot be saved, and cannot consume a
   assert.equal(f.g.saved, false);
 });
 
-test('explosions charge interrupted speech and pending votes once, never already-submitted voters', () => {
+test('explosions interrupt the day and enter night even past the turn deadline; no time bank', () => {
   const f = game(), speaker = f.role('seer'), wolf = f.role('werewolf');
   Object.assign(f.g, { phase: 'day', step: 'day', speechOrder: [speaker.seat], speechIndex: 0 });
   f.at(f.g.deadline + 20000); f.act(wolf, 'day', null, { explode: true }); f.ref.tick();
   assert.equal(f.g.phase, 'night');
-  assert.equal(f.g.bank[speaker.seat], 40000);
-  assert.equal(f.g.bank[wolf.seat], 60000);
-  f.ref.tick(); assert.equal(f.g.bank[speaker.seat], 40000);
-  const v = game(), submitted = v.role('witch'), bomber = v.role('werewolf');
+  assert.ok(!('bank' in f.g));
+  const v = game(), bomber = v.role('werewolf');
   Object.assign(v.g, { phase: 'vote', step: 'vote' });
-  v.at(v.g.deadline + 5000); v.act(submitted, 'vote', -1);
   v.at(v.g.deadline + 20000); v.act(bomber, 'vote', null, { explode: true }); v.ref.tick();
-  assert.equal(v.g.bank[submitted.seat], 55000);
-  for (const p of v.roster.filter(p => p !== submitted)) assert.equal(v.g.bank[p.seat], 40000);
+  assert.equal(v.g.phase, 'night');
+  assert.ok(!('bank' in v.g));
 });

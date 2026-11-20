@@ -66,7 +66,7 @@ test('last words before the hunter shot, then badge; only the speaker can post, 
     f.at(f.g.deadline + 1);
     assert.throws(() => f.act(p, 'chat', null, { text: '迟到' }));
     f.ref.tick();
-    assert.equal(f.g.bank[p.seat], 60000);
+    assert.ok(!('bank' in f.g));
   };
   words(hunter); // 遗言结束才开确认窗口
   assert.equal(project(f.g, null).phase, 'settling');
@@ -107,5 +107,6 @@ test('no extra time on signup; a self-exploding sheriff gets neither badge nor l
   f.g.sheriff = wolf.seat;
   f.act(wolf, 'day', null, { explode: true });
   f.ref.tick();
-  assert.deepEqual([f.g.phase, f.g.sheriff, f.g.bank[wolf.seat]], ['night', null, 60000]);
+  assert.deepEqual([f.g.phase, f.g.sheriff], ['night', null]);
+  assert.ok(!('bank' in f.g));
 });

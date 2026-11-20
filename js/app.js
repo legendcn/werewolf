@@ -1618,12 +1618,6 @@ function renderSpectateSeats(state, mode) {
         out.textContent = '出局';
         marks.append(out);
       }
-      if ((state.afk || []).includes(seat)) {
-        const afk = document.createElement('span');
-        afk.className = 'badge badge-warning';
-        afk.textContent = '挂机';
-        marks.append(afk);
-      }
     }
     li.append(head, avatar, name, marks);
     frag.append(li);
@@ -1886,8 +1880,6 @@ function phaseText() {
   return phaseTextOf(g);
 }
 
-function isAfk(seat) { return Boolean(g?.afk?.includes(seat)); }
-
 function settling(state) { return ['hunter', 'settling'].includes(state?.phase); }
 
 function phaseTextOf(state) {
@@ -2140,12 +2132,6 @@ function renderSeats(mode, inGame) {
         marks.append(off);
         li.classList.add('sr-offline');
       }
-      if (inGame && isAfk(seat)) {
-        const afk = document.createElement('span');
-        afk.className = 'badge badge-warning';
-        afk.textContent = '挂机';
-        marks.append(afk);
-      }
     }
 
     if (pick && pick.allowed.has(seat) && member && !li.classList.contains('sr-dead')) {
@@ -2276,10 +2262,6 @@ function renderActionPanel(mode, inGame) {
   const role = myRow?.role;
   const alive = isAliveSeat(seat);
 
-  if (isAfk(seat)) {
-    els.actionArea.append(note('你已挂机：本局局时已用完，不再加时。'));
-    els.actionArea.append(makeBtn('我回来了', 'btn-warning', () => act('afk', null, { back: true })));
-  }
   if (g.phase === 'settling' && g.step === 'deathConfirm') {
     els.actionArea.append(submittedHelp('deathConfirm') ? note('已确认，等待结算…')
       : makeBtn('确认出局（不翻牌）', 'btn-outline-secondary', () => act('deathConfirm', null)));
@@ -2676,7 +2658,7 @@ function renderMyBar() {
 
   els.myBar.hidden = false;
   els.myBar.className = `sr-me mb-3 ${camp.bar}`.trim();
-  els.mySeat.textContent = seat ? `座位 ${pad(seat)}${g.myBank != null && g.phase !== 'finished' ? ` · 剩余局时 ${Math.ceil(g.myBank / 1000)} 秒` : ''}` : '座位 —';
+  els.mySeat.textContent = seat ? `座位 ${pad(seat)}` : '座位 —';
   els.revealBtn.textContent = roleShown ? '收起身份牌' : '查看我的身份牌';
 
   els.roleCard.className = `card mb-3 sr-rolecard ${role.camp === 'killer' ? 'sr-rolecard-killer' : role.camp === 'police' ? 'sr-rolecard-police' : 'sr-rolecard-neutral'}`.trim();

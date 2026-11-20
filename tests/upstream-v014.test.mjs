@@ -3,55 +3,29 @@ import assert from 'node:assert/strict';
 import { project } from '../supabase/functions/game/protocol.mjs';
 import { game } from './referee-fixture.mjs';
 
-test('60-second turn; only the late wolf spends bank, once and at acceptance', () => {
+test('every turn is a fixed 60 seconds with no time bank', () => {
   const { g, ref, roster, act, at, now } = game();
   assert.equal(g.step, 'wolves');
   assert.equal(g.deadline - now(), 60_000);
-  const [first, second] = roster.filter((p) => p.role === 'werewolf');
+  assert.ok(!('bank' in g) && !('afk' in g));
+  const [first] = roster.filter((p) => p.role === 'werewolf');
   act(first, 'wolves', first.seat);
   ref.tick();
-  at(g.deadline + 20_000);
+  assert.equal(g.step, 'wolves'); // the other wolves are still deciding
+  at(g.deadline + 1);
   ref.tick();
-  ref.tick();
-  assert.equal(g.step, 'wolves');
-  assert.equal(g.bank[first.seat], 60_000);
-  act(second, 'wolves', second.seat);
-  assert.equal(g.bank[second.seat], 40_000);
-  at(now() + 5_000);
-  ref.tick();
-  assert.equal(g.step, 'wolves'); // third wolf is still deciding
-  assert.throws(() => act(second, 'wolves', first.seat));
-  assert.equal(g.bank[second.seat], 40_000);
+  assert.notEqual(g.step, 'wolves'); // expiry advances the night even without a full vote
 });
 
-test('speech and runoff share one bank; expiry, AFK return, rematch compatibility', () => {
+test('speech turns expire at 60 seconds; late actions are rejected', () => {
   const { g, ref, roster, act, at, now } = game();
   const p = roster[0], q = roster[1];
-  delete g.bank;
-  delete g.afk; // previously saved v8 room
-  Object.assign(g, { phase: 'day', step: 'day', speechOrder: [p.seat, q.seat], speechIndex: 0 });
-  at(g.deadline + 20_000);
-  act(p, 'chat', null, { text: '还在发言' });
-  act(p, 'speech', null, { turn: 0 });
+  Object.assign(g, { phase: 'day', step: 'day', speechOrder: [p.seat, q.seat], speechIndex: 0, deadline: now() + 60_000 });
+  at(g.deadline + 1);
+  assert.throws(() => act(p, 'chat', null, { text: '迟到' }));
   ref.tick();
-  assert.equal(g.bank[p.seat], 40_000);
   assert.equal(g.speechIndex, 1);
   assert.equal(g.deadline - now(), 60_000);
-  Object.assign(g, { phase: 'runoff', step: 'runoff', runoffSeats: [p.seat, q.seat] });
-  at(g.deadline + 40_000);
-  ref.tick();
-  assert.ok(g.afk.includes(p.seat));
-  assert.equal(g.phase, 'runoff');
-  assert.throws(() => act(p, 'runoff', q.seat));
-  act(p, 'afk', null, { back: true });
-  assert.equal(g.bank[p.seat], 0);
-  assert.ok(!g.afk.includes(p.seat));
-  assert.throws(() => act(p, 'runoff', q.seat));
-  act(q, 'runoff', p.seat);
-  assert.equal(g.bank[q.seat], 20_000);
-  at(g.deadline + 60_000);
-  ref.tick();
-  assert.notEqual(g.phase, 'runoff');
 });
 
 test('a wolf can explode immediately during voting, independently of its existing vote', () => {
@@ -119,7 +93,6 @@ for (const choice of ['conceal', 'reveal', 'shoot', 'timeout']) {
     assert.equal(g.log.some((e) => e.text.includes('翻开猎人牌')), false); // 夜间翻牌/死因不公开
     assert.ok(!g.log.some((e) => /号出局（/.test(e.text)), '夜死讯不应带死因括号');
     assert.equal(roster.filter((p) => !p.alive).length, choice === 'shoot' ? 2 : 1);
-    if (choice === 'timeout') assert.ok(!project(g, null).afk.includes(hunter.seat));
   });
 }
 

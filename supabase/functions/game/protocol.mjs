@@ -45,9 +45,6 @@ export function project(g, me) {
   }
   // A pending choice is private, not a public reveal of the victim's role.
   if (g.phase === 'hunter') out.phase = 'settling';
-  // Private timeouts must stay private even on the next day, and on return.
-  out.afk = (g.afk || []).filter(s => (!me?.departed && s === me?.seat) ||
-    (g.publicAfk?.includes(s) && g.aliveSeats.includes(s)));
   out.step = out.phase === 'settling' ? 'settling' : g.phase === 'night' ? 'night' : g.step;
   if (g.phase === 'badge') out.badgePending = g.badgePending;
   if (g.phase === 'lastwords') out.lastWordsSeat = g.lastWordsSeat;
@@ -61,7 +58,6 @@ export function project(g, me) {
   }
   if (!me || me.departed) return out;
   if (g.nightPending?.some((d) => d.seat === me.seat)) out.pendingDead = true;
-  out.myBank = g.bank?.[me.seat] ?? 60_000;
   if (g.phase === 'hunter' && me.seat === g.hunterPending) {
     Object.assign(out, { phase: 'hunter', step: 'hunter', hunterPending: me.seat });
   } else if (g.phase === 'hunter' && g.deathConfirmSeats?.includes(me.seat)) {
@@ -95,16 +91,6 @@ export function submit(engine, me, cmd, actions) {
   const repeat = actions.some((a) => a.day === g.day && a.step === step && a.seat === seat);
   const check = (value) => requireGame(value, '当前不能执行这个行动');
   check(!me.departed);
-  if (step === 'afk') {
-    check(payload.back === true && g.afk?.includes(seat));
-    g.afk = g.afk.filter((s) => s !== seat); // returning does not refill the bank
-    if (g.publicAfk?.includes(seat)) {
-      g.publicAfk = g.publicAfk.filter(s => s !== seat);
-      if (alive(seat)) g.log.push({ day: g.day, kind: 'system', text: `${String(seat).padStart(2, '0')} 号回来了，解除挂机` });
-    }
-    engine.record(seat, 'afk', null, { back: true });
-    return;
-  }
   if (step === 'deathConfirm') {
     check(g.phase === 'hunter' && g.deathConfirmSeats?.includes(seat) && seat !== g.hunterPending &&
       !repeat && target === null && !payload.reveal && engine.inTime(seat));

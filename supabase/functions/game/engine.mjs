@@ -1,6 +1,6 @@
 // One engine per locked room transaction. No DOM, database or module-level game state.
 import { civicPhase, civicScenes, speechOrder } from './civic.mjs';
-import { BANK_MS, TURN_MS, turnClock } from './turn-clock.mjs';
+import { TURN_MS, turnClock } from './turn-clock.mjs';
 import '../_shared/rules.js';
 import '../_shared/modes.js';
 export const Rules = globalThis.WolfRules;
@@ -23,7 +23,7 @@ const REASON_LABEL = {
 
 export function engine({ state: g, roster, mode, actions = [], clock = Date.now }) {
   const pending = [];
-  const timer = turnClock(() => g, expectedSeats, fetchActions, roster, clock);
+  const timer = turnClock(() => g, clock);
   const aliveSet = () => new Set(g.aliveSeats);
   const isAliveSeat = (seat) => g.aliveSeats.includes(seat);
   const rowBySeat = (seat) => roster.find((r) => r.seat === seat);
@@ -46,7 +46,6 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
   }
   function record(seat, step, target, payload = {}) {
     const confirmation = step === 'hunter' || step === 'deathConfirm';
-    timer.charge(seat, confirmation ? 'hunter' : step);
     const phase = confirmation ? g.hunterFrom : g.phase;
     const action = { day: g.day, phase, step, seat, target, payload };
     actions.push(action);
@@ -112,8 +111,6 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       speechIndex: 0,
       deaths: [],
       kicked: [],
-      bank: Object.fromEntries(roster.map((p) => [p.seat, BANK_MS])),
-      afk: [],
       log: [{ day: 1, kind: 'system', text: `板子：${mode.name}，共 ${total} 人` }],
       winner: null,
       winReason: '',
@@ -202,12 +199,8 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     const expected = expectedSeats(step);
     if (!expected.length) return true;
     const acted = new Set(actions.filter((a) => a.payload && !a.payload.ignore).map((a) => a.seat));
-    if (expected.every((seat) => acted.has(seat))) return true;
-    if (g.phase !== 'night') return false;
-    // 夜晚给离线/掉线玩家留一点反应时间，避免女巫刚被判定离线就被跳过
-    const started = g.stepStart ?? (g.deadline - TURN_MS);
-    if (clock() - started < 12000) return false;
-    return expected.every((seat) => acted.has(seat) || !isSeatOnline(seat));
+    // 夜晚回合固定等满 60 秒或全员行动，不因短暂离线提前跳过（避免吞掉女巫等回合）。
+    return expected.every((seat) => acted.has(seat));
   }
 
   function tick() {
@@ -286,7 +279,6 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
         : `${pad(target)} 号离开房间，按出局处理`,
     });
     if (!isAliveSeat(target)) {
-      timer.interrupt([target]);
       return;
     }
     const deaths = Rules.expandDeaths([{ seat: target, reason }], {
@@ -295,7 +287,6 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       wolfbeautySeat: roleSeat('wolfbeauty'),
       charmTarget: g.charmTarget,
     });
-    timer.interrupt(deaths.map(d => d.seat));
     // Pause, don't discard, the interrupted turn. Another departure during a
     // confirmation may add deaths but must not replace the original continuation.
     const resume = { phase: g.phase, step: g.step, stepStart: g.stepStart, deadline: g.deadline, pausedAt: clock() };
@@ -731,7 +722,6 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
         return true;
       }
       if (g.teams.wolves.includes(target)) {
-        timer.interrupt(); // the discussion ends immediately
         g.log.push({
           day: g.day,
           kind: 'system',
@@ -762,9 +752,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
           charmTarget: g.charmTarget,
         });
         // Preserve the existing 15-second discussion grace after a failed duel.
-        // If it resets the speaker's deadline, settle the old overtime first.
         const nextDeadline = Math.max(g.deadline, clock() + 15000);
-        timer.interrupt(nextDeadline > g.deadline ? null : deaths.map(d => d.seat));
         const next = {phase:'day', step:'day', deadline:nextDeadline, pausedAt:clock()};
         const outcome = applyDeaths(deaths, 'day');
         if (outcome === 'continue') civic.afterDeaths(next);
@@ -792,7 +780,6 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
   }
 
   function resolveExplode(action) {
-    timer.interrupt(); // before removing the speaker/voters or resetting the deadline
     const seat = action.seat;
     const row = rowBySeat(seat);
     const isKing = row?.role === 'wolfking';

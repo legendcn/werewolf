@@ -79,6 +79,45 @@ test('day-1 direction is chosen by the final badge holder after deaths/words/bad
   assert.deepEqual(f.g.speechOrder, cycle);
 });
 
+// 高优先回归：狼人白天自爆直接进夜后，女巫即使短暂离线，回合也必须等满 60 秒，
+// 不能像旧版那样 12 秒就被跳过（“自爆吞女巫回合”）。
+test('self-boom into night keeps the witch turn for the full 60s even if she briefly drops offline', () => {
+  const f = game('std12');
+  const witch = f.role('witch');
+  let guard = 0;
+  while (!(f.g.phase === 'day' && f.g.day >= 2) && guard++ < 300) {
+    if (f.g.phase === 'night') { for (const s of f.ref.expectedSeats(f.g.step)) f.ref.record(s, f.g.step, null, {}); }
+    else if (f.g.phase === 'dawn') f.at(f.g.deadline);
+    else if (f.g.phase === 'sheriff') { for (const s of f.g.aliveSeats) f.ref.record(s, f.g.step, null, { run: false }); }
+    else if (f.g.phase === 'hunter') { for (const s of (f.g.deathConfirmSeats ?? [f.g.hunterPending])) if (s != null) f.ref.record(s, 'deathConfirm', null, {}); }
+    else if (f.g.phase === 'lastwords') f.ref.record(f.g.lastWordsSeat, 'lastwords', null, { end: true });
+    else if (f.g.phase === 'order') f.ref.record(f.g.sheriff, 'order', null, { dir: 'cw' });
+    else if (f.g.phase === 'vote' || f.g.phase === 'runoff') { for (const s of f.g.aliveSeats) f.ref.record(s, f.g.step, -1, {}); }
+    else if (f.g.phase === 'day') { const sp = f.g.speechOrder[f.g.speechIndex]; if (sp != null) f.ref.record(sp, 'speech', null, { turn: f.g.speechIndex }); }
+    f.ref.tick();
+  }
+  const boomer = f.roster.find(p => ['werewolf', 'wolfking'].includes(p.role) && p.alive);
+  f.act(boomer, 'day', null, { explode: true });
+  f.ref.tick();
+  assert.equal(f.g.phase, 'night');
+  guard = 0;
+  while (f.g.phase === 'night' && f.g.step !== 'witch' && guard++ < 20) {
+    for (const s of f.ref.expectedSeats(f.g.step)) f.ref.record(s, f.g.step, null, {});
+    f.ref.tick();
+  }
+  assert.equal(f.g.step, 'witch');
+  const witchRow = f.roster.find(r => r.seat === witch.seat);
+  witchRow.online = false;
+  const start = f.now();
+  f.at(start + 13000); f.ref.tick();
+  assert.equal(f.g.step, 'witch', '离线 13 秒不应吞掉女巫回合');
+  assert.ok(f.g.deadline - f.now() > 0, '女巫回合应仍有剩余时间');
+  witchRow.online = true;
+  f.act(witch, 'witch', null, {});
+  f.ref.tick();
+  assert.notEqual(f.g.step, 'witch', '女巫回来后行动应正常结算');
+});
+
 test('sheriff picks the direction but speaks last; without a sheriff the death-based start is kept', () => {
   for (const dir of ['cw', 'ccw']) {
     const f = game('std9');
