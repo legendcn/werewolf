@@ -494,25 +494,65 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     g.poison = null;
 
     g.log.push({ day: g.day, kind: 'dawn', text: `第 ${g.day} 天 · 天亮了` });
+    // 首日先竞选警长，竞选结束后才公布昨夜死讯与遗言。
+    if (g.day === 1 && !g.sheriffDone && deaths.length) {
+      markDeaths(deaths, 'night', true);
+      g.nightPending = deaths;
+      const win = checkWin();
+      if (win) {
+        for (const d of deaths) announceDeath(d, 'night');
+        delete g.nightPending;
+        finishGame(win.winner, win.reason);
+        return;
+      }
+      civic.afterDeaths('dawn');
+      return;
+    }
     if (applyDeaths(deaths, 'night') === 'continue') civic.afterDeaths('dawn');
   }
 
-  function markDeaths(deaths, when) {
+  function announceDeath(death, when) {
+    g.deaths.push({ day: g.day, seat: death.seat, reason: death.reason });
+    civic.death(death, when);
+    g.log.push({
+      day: g.day,
+      kind: 'death',
+      text: `${pad(death.seat)} 号出局${REASON_LABEL[death.reason] || ''}`,
+    });
+    rowBySeat(death.seat).alive = false;
+  }
+
+  function markDeaths(deaths, when, silent = false) {
     if (!deaths.length && when === 'night') {
       g.log.push({ day: g.day, kind: 'dawn', text: '昨夜是平安夜' });
     }
     deaths.forEach((death) => {
       g.aliveSeats = g.aliveSeats.filter((s) => s !== death.seat);
-      g.deaths.push({ day: g.day, seat: death.seat, reason: death.reason });
-      civic.death(death, when);
-      g.log.push({
-        day: g.day,
-        kind: 'death',
-        text: `${pad(death.seat)} 号出局${REASON_LABEL[death.reason] || ''}`,
-      });
+      if (!silent) announceDeath(death, when);
     });
-    for (const death of deaths) rowBySeat(death.seat).alive = false;
     if (!isAliveSeat(g.kill)) g.kill = null;
+  }
+
+  function confirmSeats(deaths) {
+    return mode.roles.includes('hunter') && !g.hunterRevealed
+      ? deaths.filter(d => ['wolf', 'vote', 'lover', 'charm'].includes(d.reason)).map(d => d.seat)
+      : [];
+  }
+
+  // Publish the deferred first-night deaths, then their confirmation/last words.
+  function announcePending(next) {
+    const deaths = g.nightPending;
+    if (!deaths) return false;
+    delete g.nightPending;
+    for (const d of deaths) announceDeath(d, 'night');
+    const seats = confirmSeats(deaths);
+    if (seats.length) {
+      g.hunterResume = next;
+      openConfirmation(seats, 'night');
+      return true;
+    }
+    civic.afterDeaths(next);
+    return true;
   }
 
   function openConfirmation(seats, when) {
@@ -528,8 +568,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     markDeaths(deaths, when);
     // Use only public facts to decide whether a confirmation window exists.
     // A hunter who concealed the card must NOT disable cover on later deaths.
-    const seats = mode.roles.includes('hunter') && !g.hunterRevealed
-      ? deaths.filter(d => ['wolf', 'vote', 'lover', 'charm'].includes(d.reason)).map(d => d.seat) : [];
+    const seats = confirmSeats(deaths);
     // A pending hunter/confirmation can still change the outcome, so victory
     // must wait for it; only settle immediately when no window is possible.
     const pendingConfirm = seats.length || g.confirmAfterWords || g.phase === 'hunter';
@@ -605,6 +644,10 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
   }
 
   function startDay() {
+    if (g.nightPending) {
+      announcePending('day');
+      return;
+    }
     g.phase = 'day';
     g.step = 'day';
     const alive = g.aliveSeats.filter((s) => !isBotSeat(s)).sort((a, b) => a - b);
@@ -764,7 +807,10 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       charmTarget: g.charmTarget,
     });
     const outcome = applyDeaths(deaths, 'day');
-    if (outcome === 'continue') civic.afterDeaths('night');
+    if (outcome === 'continue') {
+      // 警上自爆不吞首夜遗言：先公布昨夜死讯并留遗言，再入夜。
+      if (!announcePending('night')) civic.afterDeaths('night');
+    }
   }
 
   function startVote() {
@@ -898,6 +944,7 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       Object.assign(g, { phase, step, deadline: deadline + paused });
       if (phase === 'night') g.stepStart = (next.stepStart ?? deadline - TURN_MS) + paused;
     } else if (next === 'dawn') startDawn();
+    else if (next === 'day') startDay();
     else startNightInternal(false);
   }
 

@@ -18,16 +18,24 @@ function drainWords(f) {
   return spoken;
 }
 
-test('first-night deaths speak at dawn in ascending seat order, before the sheriff election', () => {
+function electNone(f) {
+  f.at(f.g.deadline); f.ref.tick(); // dawn → sheriff
+  for (const seat of f.g.aliveSeats) f.ref.record(seat, 'policeSignup', null, { run: false });
+  f.ref.tick(); // 无人上警 → 竞选结束 → 公布死讯
+}
+
+test('first-night deaths are announced after the election, in ascending seat order', () => {
   const f = game('wmq12'), [high, low] = [f.role('witch'), f.role('villager')];
   Object.assign(f.g, { step: 'seer', nightIndex: f.g.nightQueue.indexOf('seer'), kill: high.seat, poison: low.seat });
   f.act(f.role('seer'), 'seer', low.seat);
   f.ref.tick();
+  assert.equal(f.g.phase, 'dawn');
+  assert.ok(!f.g.log.some(e => e.kind === 'death')); // 竞选前不爆死讯
+  assert.deepEqual(project(f.g, null).aliveSeats.includes(low.seat), true);
+  electNone(f);
   assert.equal(f.g.phase, 'lastwords');
   assert.deepEqual(drainWords(f), [low.seat, high.seat].sort((a, b) => a - b));
-  assert.equal(f.g.phase, 'dawn');
-  f.at(f.g.deadline); f.ref.tick();
-  assert.equal(f.g.phase, 'sheriff'); // 首夜遗言说完才竞选
+  assert.equal(f.g.phase, 'day'); // 遗言后进入白天讨论
 });
 
 test('self-explode during the election aborts it and loses the badge, without swallowing first-night words', () => {
@@ -35,18 +43,36 @@ test('self-explode during the election aborts it and loses the badge, without sw
   Object.assign(f.g, { step: 'seer', nightIndex: f.g.nightQueue.indexOf('seer'), kill: victim.seat });
   f.act(f.role('seer'), 'seer', victim.seat);
   f.ref.tick();
-  const spoken = drainWords(f);
-  assert.deepEqual(spoken, [victim.seat]); // 遗言在竞选之前已经说完
   f.at(f.g.deadline); f.ref.tick();
   assert.equal(f.g.phase, 'sheriff');
   f.act(wolf, 'explode', null, { explode: true });
   f.ref.tick();
+  assert.deepEqual(drainWords(f), [victim.seat]); // 首夜遗言不被吞
   assert.equal(f.g.phase, 'night');
   assert.equal(f.g.sheriff, null);
   assert.equal(f.g.sheriffDone, true);
   assert.equal(f.g.day, 2);
   assert.ok(f.g.log.some(e => e.text.includes('警徽流失')));
-  assert.ok(!f.g.log.some(e => e.text.includes('发表遗言') && e.day === 2));
+});
+
+test('during the day-1 election the night deaths stay private until announced', () => {
+  const f = game('wmq12'), victim = f.role('villager');
+  Object.assign(f.g, { step: 'seer', nightIndex: f.g.nightQueue.indexOf('seer'), kill: victim.seat });
+  f.act(f.role('seer'), 'seer', victim.seat);
+  f.ref.tick();
+  f.at(f.g.deadline); f.ref.tick();
+  assert.equal(f.g.phase, 'sheriff');
+  const pub = project(f.g, null);
+  assert.ok(pub.aliveSeats.includes(victim.seat)); // 死讯未公布，座位仍显示存活
+  assert.ok(!pub.log.some(e => e.kind === 'death'));
+  assert.equal(project(f.g, victim).pendingDead, true);
+  assert.equal(project(f.g, f.role('seer')).pendingDead, undefined);
+  assert.throws(() => f.act(victim, 'policeSignup', null, { run: true }));
+  for (const seat of f.g.aliveSeats) f.ref.record(seat, 'policeSignup', null, { run: false });
+  f.ref.tick();
+  assert.equal(f.g.phase, 'lastwords');
+  assert.ok(project(f.g, null).log.some(e => e.kind === 'death'));
+  assert.ok(!project(f.g, null).aliveSeats.includes(victim.seat));
 });
 
 test('self-explode during someone’s last words interrupts it and goes straight to night', () => {

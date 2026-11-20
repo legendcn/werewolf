@@ -2398,6 +2398,10 @@ function renderVotePanel(seat, role) {
 
 function renderSheriffPanel(seat) {
   const step = g.step;
+  if (g.pendingDead) {
+    els.actionArea.append(note('你昨夜已出局，死讯将在竞选结束后公布；本轮不能上警或投票。'));
+    return;
+  }
   if (step === 'policeSignup') {
     if (!isAliveSeat(seat)) {
       els.actionArea.append(note('你已出局，只能旁观警长竞选。'));

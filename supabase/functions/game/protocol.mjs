@@ -39,6 +39,10 @@ export function project(g, me) {
       'winReason',
     ]
   ) out[k] = g[k];
+  // 首日竞选期间死讯未公布：对外仍显示这些座位存活。
+  if (g.nightPending?.length) {
+    out.aliveSeats = [...g.aliveSeats, ...g.nightPending.map((d) => d.seat)].sort((a, b) => a - b);
+  }
   // A pending choice is private, not a public reveal of the victim's role.
   if (g.phase === 'hunter') out.phase = 'settling';
   // Private timeouts must stay private even on the next day, and on return.
@@ -56,6 +60,7 @@ export function project(g, me) {
     });
   }
   if (!me || me.departed) return out;
+  if (g.nightPending?.some((d) => d.seat === me.seat)) out.pendingDead = true;
   out.myBank = g.bank?.[me.seat] ?? 60_000;
   if (g.phase === 'hunter' && me.seat === g.hunterPending) {
     Object.assign(out, { phase: 'hunter', step: 'hunter', hunterPending: me.seat });
