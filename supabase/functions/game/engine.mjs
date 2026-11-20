@@ -499,6 +499,11 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
       markDeaths(deaths, 'night', true);
       g.nightPending = deaths;
       const win = checkWin();
+      // 判胜前必须先给首夜死者开出局确认窗口：猎人那一枪可能改变屠边结果。
+      if (win && confirmSeats(deaths).length) {
+        announcePending('dawn');
+        return;
+      }
       if (win) {
         for (const d of deaths) announceDeath(d, 'night');
         delete g.nightPending;
@@ -575,6 +580,11 @@ export function engine({ state: g, roster, mode, actions = [], clock = Date.now 
     if (!pendingConfirm) {
       const win = checkWin();
       if (win) {
+        // 首夜死讯尚未公布时（警上自爆等），先公布并开确认窗口，确认后再判胜。
+        if (g.nightPending && confirmSeats(g.nightPending).length) {
+          announcePending('night');
+          return 'pending';
+        }
         clearScenes();
         finishGame(win.winner, win.reason);
         return 'finished';

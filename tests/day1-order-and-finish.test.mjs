@@ -18,6 +18,13 @@ test('election self-boom that ends the game still publishes the deferred first-n
   assert.equal(f.g.phase, 'sheriff');
   f.act(king, 'explode', c.seat, { explode: true, target: c.seat });
   f.ref.tick();
+  // 首夜死者含被刀者，须先走出局确认窗口再终局。
+  let guard = 0;
+  while (f.g.phase === 'hunter' && guard++ < 10) {
+    if (f.g.hunterPending != null) f.act(f.roster.find(p => p.seat === f.g.hunterPending), 'hunter', null, {});
+    else f.act(f.roster.find(p => p.seat === f.g.deathConfirmSeats[0]), 'deathConfirm', null, {});
+    f.ref.tick();
+  }
   assert.equal(f.g.phase, 'finished');
   assert.equal(f.g.winner, 'good');
   assert.equal(f.g.nightPending, undefined);
