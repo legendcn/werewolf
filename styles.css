@@ -252,7 +252,19 @@ body {
   box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.3);
 }
 
-.sr-seat.sr-speaking { border-color: #f0ad00; box-shadow: 0 0 0 3px rgba(240, 173, 0, 0.35); }
+.sr-seat.sr-speaking { border-color: #f0ad00; box-shadow: 0 0 0 3px rgba(240, 173, 0, 0.35); background: #fff8e1; }
+
+.sr-seat.sr-wolfpicked { border-color: #8a2be2; box-shadow: 0 0 0 3px rgba(138, 43, 226, 0.25); }
+
+.sr-wolfpick {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 72%;
+  font-weight: 600;
+  color: #5b1d9c;
+}
 
 .sr-clock {
   font-variant-numeric: tabular-nums;

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.15.0">
+  <link rel="stylesheet" href="styles.css?v=0.16.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -103,7 +103,9 @@
               <ol class="pl-3 mb-0">
                 <li>登录后选板子、点「创建房间」，把 6 位房间码发给朋友；每种板子人数固定，<strong>满员后房主开牌</strong>。昵称就是账号名，注册后不可改，评分也记在账号名上。</li>
                 <li>夜晚按顺序行动：盗贼换牌 → 丘比特连情侣 → 守卫守护 → 狼人刀人 → 狼美人魅惑 → 女巫用药 → 预言家查验，<strong>每一步都有 60 秒</strong>；<strong>狼人夜里可在「狼人频道」私聊</strong>。</li>
-                <li>天亮公布出局玩家（不翻身份），存活玩家按<strong>固定顺序</strong>每人 60 秒发言（还没轮到你也能提前打字，轮到你时自动发出），全部说完后同时投票（60 秒）；平票进入 PK，再平票则无人出局。</li>
+                <li>天亮公布出局玩家（不翻身份），存活玩家按<strong>固定顺序</strong>每人 60 秒发言（第一天的顺序从 01 号开始；有人出局就从死者下家顺时针开始），<strong>还没轮到你也能提前打字</strong>，轮到你时自动发出；全部说完后同时投票（60 秒）；平票进入 PK，再平票则无人出局。</li>
+                <li><strong>警长</strong>：第 1 天白天先竞选。想当警长的点「上警」并发言，没上警的存活玩家投票选出警长；平票进入警长 PK，再平票则警徽流失。警长投票算 <strong>1.5 票</strong>，每天从自己开始决定顺时针还是逆时针发言；警长出局时（自爆除外）可以把警徽移交给一名存活玩家，不移交则警徽作废。</li>
+                <li><strong>遗言</strong>：被投票放逐、被猎人带走、被决斗、以及第 2 晚起夜里出局的玩家可以发表遗言（60 秒，可连发多条）；<strong>第一晚出局的玩家没有遗言</strong>；自爆和被请离也没有遗言，猎人先开枪再留遗言。</li>
                 <li><strong>自爆</strong>：普通狼人和白狼王在白天（含投票阶段）可以自爆，翻牌立即出局并跳过当天剩余流程、直接天黑；白狼王自爆还可以带走一人；<strong>狼美人不能自爆</strong>。</li>
                 <li><strong>猎人</strong>：夜里或白天出局时自己决定<strong>翻牌</strong>（公开猎人身份，可以开枪带走一人）或<strong>不翻牌</strong>（身份保密、不开枪）；被毒杀、被白狼王自爆带走、被请出房间时不能开枪。</li>
                 <li><strong>局时</strong>：每个人本局有 60 秒局时。每个回合的 60 秒用完后，系统会按你的剩余局时继续等你，迟到的时间从局时里扣（例如第一次迟到 20 秒，局时就只剩 40 秒）；局时用完会被标记「挂机」，点「我回来了」解除。</li>
@@ -398,7 +400,7 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.15.0 · 历史对局/旁观修复 · 60 秒发言 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 旁观 / 历史回放 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.16.0 · 警长竞选 / 遗言 / 发言高亮 · 60 秒发言 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 旁观 / 历史回放 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="authModal" class="sr-modal" hidden>
@@ -465,9 +467,9 @@
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.15.0"></script>
-  <script src="js/modes.js?v=0.15.0"></script>
-  <script src="js/rules.js?v=0.15.0"></script>
-  <script src="js/app.js?v=0.15.0"></script>
+  <script src="js/config.js?v=0.16.0"></script>
+  <script src="js/modes.js?v=0.16.0"></script>
+  <script src="js/rules.js?v=0.16.0"></script>
+  <script src="js/app.js?v=0.16.0"></script>
 </body>
 </html>

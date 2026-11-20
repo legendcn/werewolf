@@ -16,6 +16,13 @@ const DUR = {
   vote: 60000,
   runoff: 60000,
   hunter: 60000,
+  policeSignup: 60000,
+  policeSpeech: 60000,
+  policeVote: 60000,
+  policeRunoff: 60000,
+  order: 60000,
+  badge: 60000,
+  lastwords: 60000,
 };
 
 const STEP_LABEL = {
@@ -31,6 +38,13 @@ const STEP_LABEL = {
   vote: '投票',
   runoff: 'PK 投票',
   hunter: '猎人开枪',
+  policeSignup: '上警',
+  policeSpeech: '候选人发言',
+  policeVote: '警下投票',
+  policeRunoff: '警长 PK',
+  order: '警长定顺序',
+  badge: '警徽移交',
+  lastwords: '遗言',
 };
 
 const REASON_LABEL = {
@@ -1773,6 +1787,10 @@ function spectatePromptText(state) {
   if (state.phase === 'vote' || state.phase === 'runoff') return '投票中，结果在本轮结束后公布。';
   if (state.phase === 'hunter') return '正在结算…';
   if (state.phase === 'dawn') return '天亮了，等待公布昨夜结果…';
+  if (state.phase === 'sheriff') return '警长竞选中，结果稍后公布。';
+  if (state.phase === 'order') return '警长正在决定今天的发言方向。';
+  if (state.phase === 'lastwords') return '正在发表遗言。';
+  if (state.phase === 'badge') return '警长出局，正在移交警徽。';
   return '';
 }
 
@@ -1834,6 +1852,12 @@ function renderSpectateSeats(state, mode) {
         bot.className = 'badge badge-info';
         bot.textContent = '人机';
         marks.append(bot);
+      }
+      if (state.sheriff === seat) {
+        const sheriff = document.createElement('span');
+        sheriff.className = 'badge badge-dark';
+        sheriff.textContent = '警长';
+        marks.append(sheriff);
       }
       if ((state.kicked || []).includes(seat)) {
         const kicked = document.createElement('span');
@@ -2018,8 +2042,8 @@ async function fetchActions(day, step) {
 
 function renderFeed() {
   const entries = [];
-  if (g?.log) entries.push(...g.log.slice(-100));
   localFeed.slice(-20).forEach((text) => entries.push({ kind: 'system', text }));
+  if (g?.log) entries.push(...g.log.slice(-100));
   const stick = els.feed.scrollHeight - els.feed.scrollTop - els.feed.clientHeight < 40;
   const frag = document.createDocumentFragment();
   entries.forEach((entry) => {
@@ -2206,8 +2230,8 @@ function renderRoom() {
   }
 
   els.modeLabel.textContent = `${mode.name} · ${total} 人`;
-  renderSeats(mode, inGame);
   renderActionPanel(mode, inGame);
+  renderSeats(mode, inGame);
   renderModeInfo(mode);
   renderMyBar();
   renderStatusPrompt(mode, inGame);
@@ -2228,6 +2252,14 @@ function phaseTextOf(state) {
   if (state.phase === 'vote') return `第 ${state.day} 天 · 投票`;
   if (state.phase === 'runoff') return `第 ${state.day} 天 · PK 投票`;
   if (state.phase === 'hunter') return '出局结算';
+  if (state.phase === 'sheriff') {
+    if (state.step === 'policeSpeech') return '第 1 天 · 候选人发言';
+    if (state.step === 'policeVote' || state.step === 'policeRunoff') return '第 1 天 · 警下投票';
+    return '第 1 天 · 警长竞选';
+  }
+  if (state.phase === 'order') return `第 ${state.day} 天 · 警长定发言顺序`;
+  if (state.phase === 'lastwords') return `第 ${state.day} 天 · 遗言`;
+  if (state.phase === 'badge') return '警徽移交';
   return `第 ${state.day} 天 · 讨论`;
 }
 
@@ -2242,6 +2274,36 @@ function renderStatusPrompt(mode, inGame) {
   }
   if (g.phase === 'finished') {
     els.statusPrompt.textContent = g.winReason || '本局结束';
+    return;
+  }
+  if (g.phase === 'sheriff') {
+    if (g.step === 'policeSignup') {
+      els.statusPrompt.textContent = '警长竞选：想当警长的玩家点「上警」；不想当也请点「不上警」，超时按不上警处理。';
+    } else if (g.step === 'policeSpeech') {
+      const order = g.policeOrder || [];
+      const seat = order[g.policeIndex];
+      els.statusPrompt.textContent = seat == null
+        ? '候选人发言结束，马上进入警下投票…'
+        : `候选人 ${pad(seat)} 号发言（第 ${g.policeIndex + 1} / ${order.length} 位），每人 ${Math.round(DUR.policeSpeech / 1000)} 秒。`;
+    } else if (g.step === 'policeRunoff') {
+      els.statusPrompt.textContent = `警长 PK：${(g.runoffSeats || []).map(pad).join('、')} 号平票，警下玩家请重新投票。`;
+    } else {
+      els.statusPrompt.textContent = '警下投票：没上警的存活玩家点击候选人投票，候选人自己不能投票。';
+    }
+    return;
+  }
+  if (g.phase === 'order') {
+    els.statusPrompt.textContent = `警长 ${pad(g.sheriff)} 号正在决定今天从哪一边开始发言…`;
+    return;
+  }
+  if (g.phase === 'lastwords') {
+    els.statusPrompt.textContent = g.lastWordsSeat == null
+      ? '遗言结束，继续…'
+      : `${pad(g.lastWordsSeat)} 号正在发表遗言（${Math.round(DUR.lastwords / 1000)} 秒）…`;
+    return;
+  }
+  if (g.phase === 'badge') {
+    els.statusPrompt.textContent = '警长已出局，正在移交警徽…';
     return;
   }
   if (!isAliveSeat(myRow?.seat)) {
@@ -2305,6 +2367,9 @@ function renderSeats(mode, inGame) {
     bySeat.set(seat, member);
   });
   const alive = inGame ? aliveSet() : null;
+  const policeSpeaker = inGame && g.phase === 'sheriff' && g.step === 'policeSpeech'
+    ? (g.policeOrder || [])[g.policeIndex]
+    : null;
 
   const frag = document.createDocumentFragment();
   for (let seat = 1; seat <= total; seat += 1) {
@@ -2333,7 +2398,7 @@ function renderSeats(mode, inGame) {
     } else {
       if (member.id === session.playerId) li.classList.add('sr-self');
       if (inGame && alive && !alive.has(seat)) li.classList.add('sr-dead');
-      if (inGame && currentSpeaker() === seat) li.classList.add('sr-speaking');
+      if (inGame && (currentSpeaker() === seat || policeSpeaker === seat)) li.classList.add('sr-speaking');
 
       if (!member.is_bot) {
         const rate = ratings.get(member.name);
@@ -2350,6 +2415,25 @@ function renderSeats(mode, inGame) {
         host.className = 'badge badge-warning';
         host.textContent = '房主';
         head.append(host);
+      }
+
+      if (inGame && g.sheriff === seat) {
+        const sheriff = document.createElement('span');
+        sheriff.className = 'badge badge-dark';
+        sheriff.textContent = '警长';
+        marks.append(sheriff);
+      }
+      if (inGame && g.phase === 'sheriff' && (g.sheriffCandidates || []).includes(seat)) {
+        const police = document.createElement('span');
+        police.className = 'badge badge-warning';
+        police.textContent = '上警';
+        marks.append(police);
+      }
+      if (inGame && (currentSpeaker() === seat || policeSpeaker === seat)) {
+        const speaking = document.createElement('span');
+        speaking.className = 'badge badge-warning';
+        speaking.textContent = '发言中';
+        marks.append(speaking);
       }
 
       if (member.is_bot) {
@@ -2401,6 +2485,16 @@ function renderSeats(mode, inGame) {
     }
 
     li.append(head, avatar, name, marks);
+    if (inGame && member && g.phase === 'night' && g.step === 'wolves' && isMyWolf()) {
+      const pickers = wolfPicks.filter((row) => row.target === seat);
+      if (pickers.length) {
+        li.classList.add('sr-wolfpicked');
+        const tag = document.createElement('div');
+        tag.className = 'sr-wolfpick';
+        tag.textContent = `被刀 ${pickers.map((row) => pad(row.seat)).join('、')}`;
+        li.append(tag);
+      }
+    }
     if (member && canKickMember(member)) {
       const wrap = document.createElement('div');
       wrap.className = 'sr-kick';
@@ -2530,6 +2624,22 @@ function renderActionPanel(mode, inGame) {
 
   if (g.phase === 'hunter' && g.hunterPending === seat) {
     renderHunterPanel(seat);
+    return;
+  }
+  if (g.phase === 'sheriff') {
+    renderSheriffPanel(seat);
+    return;
+  }
+  if (g.phase === 'order') {
+    renderOrderPanel(seat);
+    return;
+  }
+  if (g.phase === 'lastwords') {
+    renderLastWordsPanel(seat);
+    return;
+  }
+  if (g.phase === 'badge') {
+    renderBadgePanel(seat);
     return;
   }
   if (isAfk(seat)) {
@@ -2762,6 +2872,107 @@ function renderVotePanel(seat, role) {
   appendExplodeButtons(seat, role);
 }
 
+function renderSheriffPanel(seat) {
+  const step = g.step;
+  if (step === 'policeSignup') {
+    if (!isAliveSeat(seat)) {
+      els.actionArea.append(note('你已出局，只能旁观警长竞选。'));
+      return;
+    }
+    if (submittedHelp('policeSignup')) {
+      els.actionArea.append(note('已选择，等待其他玩家…'));
+      return;
+    }
+    els.actionArea.append(note('警长竞选：上警后要发言，再接受没上警的玩家投票；不想当请点「不上警」。'));
+    els.actionArea.append(makeBtn('上警', 'btn-danger', () => act('policeSignup', null, { run: true })));
+    els.actionArea.append(makeBtn('不上警', 'btn-outline-secondary', () => act('policeSignup', null, { run: false })));
+    return;
+  }
+  if (step === 'policeSpeech') {
+    const order = g.policeOrder || [];
+    const cand = order[g.policeIndex];
+    if (cand == null) {
+      els.actionArea.append(note('候选人发言结束，准备警下投票…'));
+      return;
+    }
+    if (cand !== seat) {
+      els.actionArea.append(note(`等待 ${pad(cand)} 号候选人发言（第 ${g.policeIndex + 1} / ${order.length} 位）`));
+      return;
+    }
+    if (submittedHelp('policeSpeech')) {
+      els.actionArea.append(note('已结束竞选发言，等待下一位…'));
+      return;
+    }
+    els.actionArea.append(note('轮到你竞选发言：在右侧输入，可连发多条，说完点「结束发言」。'));
+    els.actionArea.append(makeBtn('结束发言', 'btn-warning', () => act('policeSpeech', null, { turn: g.policeIndex })));
+    return;
+  }
+  if (submittedHelp(g.step)) {
+    els.actionArea.append(note('已投票，等待其他警下玩家…'));
+    return;
+  }
+  const cands = step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
+  if (cands.includes(seat)) {
+    els.actionArea.append(note('你是警长候选人，不能参与警下投票。'));
+    return;
+  }
+  if (!isAliveSeat(seat)) {
+    els.actionArea.append(note('你已出局，不能投票。'));
+    return;
+  }
+  if (!pick || pick.kind !== 'police' || pick.key !== `${g.step}:${cands.join(',')}`) {
+    beginPick('police', cands, 1, (sel) => act(g.step, sel[0]));
+    pick.key = `${g.step}:${cands.join(',')}`;
+  }
+  els.actionArea.append(note(`警下投票：从 ${cands.map(pad).join('、')} 号里选一人当警长。`));
+  els.actionArea.append(pickButtons((sel) => act(g.step, sel[0])));
+  els.actionArea.append(makeBtn('弃权', 'btn-outline-secondary', () => act(g.step, -1)));
+}
+
+function renderOrderPanel(seat) {
+  if (g.sheriff !== seat) {
+    els.actionArea.append(note(`等待警长 ${pad(g.sheriff)} 号决定发言方向…`));
+    return;
+  }
+  if (submittedHelp('order')) {
+    els.actionArea.append(note('已选择，等待开始发言…'));
+    return;
+  }
+  els.actionArea.append(note('你是警长：选择今天从自己开始顺时针还是逆时针发言。'));
+  els.actionArea.append(makeBtn('顺时针', 'btn-primary', () => act('order', null, { dir: 'cw' })));
+  els.actionArea.append(makeBtn('逆时针', 'btn-primary', () => act('order', null, { dir: 'ccw' })));
+}
+
+function renderLastWordsPanel(seat) {
+  if (g.lastWordsSeat !== seat) {
+    els.actionArea.append(note(g.lastWordsSeat != null ? `等待 ${pad(g.lastWordsSeat)} 号发表遗言…` : '遗言结束…'));
+    return;
+  }
+  if (submittedHelp('lastwords')) {
+    els.actionArea.append(note('遗言已结束，等待结算…'));
+    return;
+  }
+  els.actionArea.append(note('你可以发表遗言：在右侧输入，可连发多条；说完点「说完了」。'));
+  els.actionArea.append(makeBtn('说完了', 'btn-warning', () => act('lastwords', null, { end: true })));
+}
+
+function renderBadgePanel(seat) {
+  if (g.badgePending !== seat) {
+    els.actionArea.append(note('等待警长移交警徽…'));
+    return;
+  }
+  if (submittedHelp('badge')) {
+    els.actionArea.append(note('已处理，等待结算…'));
+    return;
+  }
+  if (!pick || pick.kind !== 'badge') {
+    beginPick('badge', g.aliveSeats.slice(), 1, (sel) => act('badge', sel[0]));
+  }
+  els.actionArea.append(note('你已出局：可以把警徽移交给一名存活玩家，点座位选人后确认；也可以撕掉警徽。'));
+  els.actionArea.append(pickButtons((sel) => act('badge', sel[0])));
+  els.actionArea.append(makeBtn('撕掉警徽（不移交）', 'btn-outline-secondary', () => act('badge', -1)));
+}
+
 function renderHunterPanel(seat) {
   if (submittedHelp('hunter')) {
     els.actionArea.append(note('已选择，等待结算…'));
@@ -2982,7 +3193,12 @@ function updateChatForm() {
   const speechDone = Boolean(g) && submitted.has(`${g.day}:speech`);
   const myTurn = Boolean(g) && g.phase === 'day' && alive && speaker === myRow?.seat && !speechDone;
   const preTurn = Boolean(g) && g.phase === 'day' && alive && !myTurn && !speechDone && canPreInput();
-  const canChat = wolfNight || myTurn || preTurn;
+  const policeTurn = Boolean(g) && g.phase === 'sheriff' && g.step === 'policeSpeech'
+    && (g.policeOrder || [])[g.policeIndex] === myRow?.seat
+    && !submitted.has(`${g.day}:policeSpeech`);
+  const lastTurn = Boolean(g) && g.phase === 'lastwords' && g.lastWordsSeat === myRow?.seat
+    && !submitted.has(`${g.day}:lastwords`);
+  const canChat = wolfNight || myTurn || preTurn || policeTurn || lastTurn;
   const pending = myTurn ? pendingSpeechCount() : 0;
   const submitBtn = els.chatForm.querySelector('button[type="submit"]');
 
@@ -2991,7 +3207,7 @@ function updateChatForm() {
   submitBtn.textContent = preTurn ? '排队' : '发送';
   els.chatInput.placeholder = preTurn
     ? '还没轮到你，可以先打字，轮到你时自动发出'
-    : '输入发言（回车发送）';
+    : lastTurn ? '输入遗言（回车发送）' : '输入发言（回车发送）';
   els.endSpeechBtn.hidden = !myTurn;
   els.endSpeechBtn.disabled = speechDone;
 
@@ -3021,6 +3237,27 @@ function updateChatForm() {
       els.chatNote.textContent = `等待 ${pad(speaker)} 号发言 · 可提前打字${pendingSpeechCount() ? `，已排队 ${pendingSpeechCount()} 条` : ''}`;
     } else if (speaker != null) els.chatNote.textContent = `等待 ${pad(speaker)} 号发言`;
     else els.chatNote.textContent = '发言结束，准备投票';
+  } else if (g.phase === 'sheriff') {
+    els.chatTitle.textContent = '竞选发言';
+    if (g.step === 'policeSpeech') {
+      const cand = (g.policeOrder || [])[g.policeIndex];
+      els.chatNote.textContent = cand == null
+        ? '候选人发言结束'
+        : (cand === myRow?.seat ? '轮到你竞选发言' : `等待 ${pad(cand)} 号候选人发言`);
+    } else {
+      els.chatNote.textContent = '警长竞选进行中，暂时不能发言';
+    }
+  } else if (g.phase === 'order') {
+    els.chatTitle.textContent = '警长定顺序';
+    els.chatNote.textContent = '等待警长选择发言方向';
+  } else if (g.phase === 'lastwords') {
+    els.chatTitle.textContent = '遗言';
+    els.chatNote.textContent = g.lastWordsSeat == null
+      ? '遗言结束'
+      : (g.lastWordsSeat === myRow?.seat ? '轮到你发表遗言（可连发多条）' : `等待 ${pad(g.lastWordsSeat)} 号发表遗言`);
+  } else if (g.phase === 'badge') {
+    els.chatTitle.textContent = '警徽移交';
+    els.chatNote.textContent = '等待警长处理警徽';
   } else if (g.phase === 'vote' || g.phase === 'runoff') {
     els.chatNote.textContent = '投票中不能发言';
   } else if (g.phase === 'hunter') {
@@ -3101,6 +3338,16 @@ async function startGame() {
       voteHistory: [],
       speechOrder: null,
       speechIndex: 0,
+      speechDir: 'cw',
+      sheriff: null,
+      sheriffCandidates: null,
+      sheriffDone: false,
+      policeOrder: null,
+      policeIndex: 0,
+      badgePending: null,
+      deathResume: null,
+      lastWordsQueue: [],
+      lastWordsSeat: null,
       deaths: [],
       kicked: [],
       bank: {},
@@ -3190,6 +3437,18 @@ function expectedSeats(step) {
     return seat && isAliveSeat(seat) ? [seat] : [];
   }
   if (step === 'hunter') return g.hunterPending != null ? [g.hunterPending] : [];
+  if (step === 'policeSignup') return g.aliveSeats.slice();
+  if (step === 'policeSpeech') {
+    const seat = (g.policeOrder || [])[g.policeIndex];
+    return seat != null ? [seat] : [];
+  }
+  if (step === 'policeVote' || step === 'policeRunoff') {
+    const cands = step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
+    return g.aliveSeats.filter((s) => !cands.includes(s));
+  }
+  if (step === 'order') return g.sheriff != null ? [g.sheriff] : [];
+  if (step === 'lastwords') return g.lastWordsSeat != null ? [g.lastWordsSeat] : [];
+  if (step === 'badge') return g.badgePending != null ? [g.badgePending] : [];
   if (step === 'vote' || step === 'runoff') {
     return g.aliveSeats.filter((s) => !g.voteBanned.includes(s));
   }
@@ -3336,7 +3595,63 @@ async function hostTick() {
         await saveGame();
       }
     } else if (g.phase === 'dawn') {
-      if (now >= g.deadline) await startDay();
+      if (now >= g.deadline) {
+        if (g.day === 1 && !g.sheriffDone) await startSheriffSignup();
+        else if (g.sheriff != null && isAliveSeat(g.sheriff) && g.aliveSeats.length > 1) await startOrderPhase();
+        else await startDay();
+      }
+    } else if (g.phase === 'sheriff') {
+      if (g.step === 'policeSignup') {
+        if (await fillBotActions('policeSignup', actions)) actions = await fetchActions(g.day, 'policeSignup');
+        if (allActed('policeSignup', actions) || now >= g.deadline) await resolveSheriffSignup(actions);
+      } else if (g.step === 'policeSpeech') {
+        const cand = (g.policeOrder || [])[g.policeIndex];
+        if (cand == null) {
+          await startPoliceVote();
+          return;
+        }
+        if (!isSeatOnline(cand)) {
+          g.log.push({ day: g.day, kind: 'system', text: `${pad(cand)} 号离线，跳过竞选发言` });
+          await advancePoliceSpeech();
+          return;
+        }
+        const rows = await fetchActions(g.day, 'policeSpeech');
+        const ended = rows.some((r) => r.seat === cand && Number(r.payload?.turn) === g.policeIndex);
+        if (ended || now >= g.deadline) await advancePoliceSpeech();
+      } else {
+        if (await fillBotActions(g.step, actions)) actions = await fetchActions(g.day, g.step);
+        if (allActed(g.step, actions) || now >= g.deadline) await resolvePoliceVote(actions);
+      }
+    } else if (g.phase === 'order') {
+      const rows = await fetchActions(g.day, 'order');
+      const picked = rows.find((r) => r.seat === g.sheriff && (r.payload?.dir === 'cw' || r.payload?.dir === 'ccw'));
+      if (picked || now >= g.deadline) {
+        g.speechDir = picked?.payload.dir === 'ccw' ? 'ccw' : 'cw';
+        g.log.push({ day: g.day, kind: 'system', text: `警长选择${g.speechDir === 'ccw' ? '逆' : '顺'}时针发言` });
+        await startDay();
+      }
+    } else if (g.phase === 'lastwords') {
+      const seat = g.lastWordsSeat;
+      if (seat == null) {
+        await endLastWords();
+      } else if (!isSeatOnline(seat)) {
+        g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号离线，没有遗言` });
+        await endLastWords();
+      } else {
+        const rows = await fetchActions(g.day, 'lastwords');
+        const ended = rows.some((r) => r.seat === seat && r.payload?.end);
+        if (ended || now >= g.deadline) await endLastWords();
+      }
+    } else if (g.phase === 'badge') {
+      const rows = await fetchActions(g.day, 'badge');
+      const seat = g.badgePending;
+      const acted = rows.some((r) => r.seat === seat);
+      if (acted || now >= g.deadline) {
+        await resolveBadge(rows);
+      } else if (seat != null && !isSeatOnline(seat)) {
+        g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号离线，警徽作废` });
+        await resolveBadge([]);
+      }
     } else if (g.phase === 'day') {
       const handled = await handleDaySpecial(actions);
       if (handled) return;
@@ -3421,6 +3736,10 @@ async function resolveKick(action) {
   if (!row || g.kicked.includes(target)) return;
   g.kicked.push(target);
   g.log.push({ day: g.day, kind: 'system', text: `站长把 ${pad(target)} 号请出了房间` });
+  if (g.sheriff === target) {
+    g.sheriff = null;
+    g.log.push({ day: g.day, kind: 'system', text: '警长被请离，警徽作废' });
+  }
   if (!isAliveSeat(target)) {
     await saveGame();
     renderRoom();
@@ -3509,6 +3828,11 @@ async function fillBotActions(step, actions) {
     let choice;
     if (step === 'hunter') choice = botHunterChoice(seat);
     else if (step === 'vote' || step === 'runoff') choice = botVoteChoice(step, seat);
+    else if (step === 'policeSignup') choice = { target: null, payload: { run: false } };
+    else if (step === 'policeVote' || step === 'policeRunoff') {
+      const cands = step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
+      choice = cands.length ? { target: cands[Math.floor(Math.random() * cands.length)], payload: {} } : null;
+    } else if (step === 'policeSpeech' || step === 'lastwords' || step === 'badge' || step === 'order') choice = null;
     else choice = botNightChoice(step, seat, row.role);
     if (!choice) continue;
     const { error } = await client.from('game_actions').insert({
@@ -3629,7 +3953,7 @@ async function finishNight() {
   const outcome = await applyDeaths(deaths, 'night');
   if (outcome !== 'continue') return;
 
-  await startDawn(false);
+  await continueAfterDeaths('dawn');
 }
 
 async function applyDeaths(deaths, when) {
@@ -3640,7 +3964,12 @@ async function applyDeaths(deaths, when) {
     g.aliveSeats = g.aliveSeats.filter((s) => s !== death.seat);
     g.deaths.push({ day: g.day, seat: death.seat, reason: death.reason });
     g.log.push({ day: g.day, kind: 'death', text: `${pad(death.seat)} 号出局${REASON_LABEL[death.reason] || ''}` });
+    queueLastWords(death, when);
   });
+  if (g.sheriff != null && deaths.some((d) => d.seat === g.sheriff
+    && d.reason !== 'selfboom' && d.reason !== 'kick')) {
+    g.badgePending = g.sheriff;
+  }
   if (deaths.length) {
     const ids = hostRoles
       .filter((row) => deaths.some((d) => d.seat === row.seat))
@@ -3675,6 +4004,92 @@ async function applyDeaths(deaths, when) {
     return 'finished';
   }
   return 'continue';
+}
+
+function queueLastWords(death, when) {
+  if (death.reason === 'selfboom' || death.reason === 'kick') return;
+  if (when === 'night' && g.day <= 1) return;
+  if (!g.lastWordsQueue.includes(death.seat)) g.lastWordsQueue.push(death.seat);
+}
+
+async function continueAfterDeaths(resume) {
+  g.deathResume = resume || g.deathResume || 'night';
+  if (await startBadgeIfNeeded()) return;
+  if (await startLastWordsIfAny()) return;
+  await resumeAfterScene();
+}
+
+async function resumeAfterScene() {
+  const target = g.deathResume || 'night';
+  g.deathResume = null;
+  if (target === 'dawn') {
+    await startDawn(false);
+  } else if (target === 'day') {
+    g.phase = 'day';
+    g.step = 'day';
+    g.deadline = Date.now() + DUR.speech;
+    await saveGame();
+    renderRoom();
+  } else {
+    await startNightInternal(false);
+  }
+}
+
+async function startBadgeIfNeeded() {
+  if (g.badgePending == null) return false;
+  const seat = g.badgePending;
+  if (g.sheriff !== seat) {
+    g.badgePending = null;
+    return false;
+  }
+  g.phase = 'badge';
+  g.step = 'badge';
+  g.deadline = Date.now() + DUR.badge;
+  g.log.push({ day: g.day, kind: 'system', text: `警长 ${pad(seat)} 号出局，${Math.round(DUR.badge / 1000)} 秒内可把警徽移交给一名存活玩家，否则警徽作废` });
+  await saveGame();
+  renderRoom();
+  return true;
+}
+
+async function resolveBadge(actions) {
+  const seat = g.badgePending;
+  const row = (actions || []).find((a) => a.seat === seat);
+  const target = row?.target != null && Number(row.target) > 0 ? Number(row.target) : null;
+  g.badgePending = null;
+  if (target != null && isAliveSeat(target)) {
+    g.sheriff = target;
+    g.log.push({ day: g.day, kind: 'system', text: `警徽移交给 ${pad(target)} 号，${pad(target)} 号成为新警长（投票算 1.5 票）` });
+  } else {
+    g.sheriff = null;
+    g.log.push({ day: g.day, kind: 'system', text: '警长没有移交，警徽作废' });
+  }
+  if (await startLastWordsIfAny()) return;
+  await resumeAfterScene();
+}
+
+async function startLastWordsIfAny() {
+  while (g.lastWordsQueue.length) {
+    const seat = g.lastWordsQueue.shift();
+    if (isBotSeat(seat)) {
+      g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号（人机）没有遗言` });
+      continue;
+    }
+    g.lastWordsSeat = seat;
+    g.phase = 'lastwords';
+    g.step = 'lastwords';
+    g.deadline = Date.now() + DUR.lastwords;
+    g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号发表遗言（${Math.round(DUR.lastwords / 1000)} 秒）` });
+    await saveGame();
+    renderRoom();
+    return true;
+  }
+  return false;
+}
+
+async function endLastWords() {
+  g.lastWordsSeat = null;
+  if (await startLastWordsIfAny()) return;
+  await resumeAfterScene();
 }
 
 function checkWin() {
@@ -3870,19 +4285,42 @@ async function startDawn(logHeader = true) {
   renderRoom();
 }
 
+function orderFrom(startSeat, alive, dir) {
+  const sorted = alive.slice().sort((a, b) => a - b);
+  if (!sorted.length) return [];
+  const cycle = dir === 'ccw' ? sorted.slice().reverse() : sorted;
+  let at = cycle.findIndex((s) => s === startSeat);
+  if (at < 0) {
+    const next = dir === 'ccw'
+      ? cycle.findIndex((s) => s < startSeat)
+      : cycle.findIndex((s) => s > startSeat);
+    at = next >= 0 ? next : 0;
+  }
+  return cycle.slice(at).concat(cycle.slice(0, at));
+}
+
 async function startDay() {
   g.phase = 'day';
   g.step = 'day';
   const alive = g.aliveSeats.filter((s) => !isBotSeat(s)).sort((a, b) => a - b);
   const hasBots = g.aliveSeats.some((s) => isBotSeat(s));
-  const startIndex = alive.length ? Math.floor(Math.random() * alive.length) : 0;
-  g.speechOrder = alive.slice(startIndex).concat(alive.slice(0, startIndex));
+  const todayDeaths = (g.deaths || []).filter((d) => d.day === g.day);
+  const sheriffFirst = g.sheriff != null && alive.includes(g.sheriff) && alive.length > 1;
+  const dir = sheriffFirst ? (g.speechDir === 'ccw' ? 'ccw' : 'cw') : 'cw';
+  const startSeat = sheriffFirst
+    ? g.sheriff
+    : (todayDeaths.length ? Math.min(...todayDeaths.map((d) => d.seat)) + 1 : 1);
+  g.speechDir = dir;
+  g.speechOrder = orderFrom(startSeat, alive, dir);
   g.speechIndex = 0;
   g.deadline = g.speechOrder.length ? Date.now() + DUR.speech : 0;
+  const fromText = sheriffFirst
+    ? `从警长 ${pad(startSeat)} 号${dir === 'ccw' ? '逆' : '顺'}时针`
+    : (todayDeaths.length ? `从死者下家 ${pad(startSeat)} 号开始顺时针` : '从 01 号开始顺时针');
   g.log.push({
     day: g.day,
     kind: 'system',
-    text: `第 ${g.day} 天讨论开始，发言顺序：${g.speechOrder.map(pad).join(' → ') || '无'}（每人 ${Math.round(DUR.speech / 1000)} 秒${hasBots ? '，人机不发言' : ''}）`,
+    text: `第 ${g.day} 天讨论开始，${fromText}，发言顺序：${g.speechOrder.map(pad).join(' → ') || '无'}（每人 ${Math.round(DUR.speech / 1000)} 秒${hasBots ? '，人机不发言' : ''}）`,
   });
   if (!g.speechOrder.length) {
     await startVote();
@@ -3943,7 +4381,7 @@ async function handleDaySpecial(actions) {
         charmTarget: g.charmTarget,
       });
       const outcome = await applyDeaths(deaths, 'day');
-      if (outcome === 'continue') await startNightInternal(false);
+      if (outcome === 'continue') await continueAfterDeaths('night');
     } else {
       g.log.push({ day: g.day, kind: 'system', text: `骑士 ${pad(knightSeat)} 号决斗 ${pad(target)} 号：${pad(target)} 号是好人，骑士出局，白天继续` });
       const deaths = Rules.expandDeaths([{ seat: knightSeat, reason: 'duel' }], {
@@ -3953,10 +4391,7 @@ async function handleDaySpecial(actions) {
         charmTarget: g.charmTarget,
       });
       const outcome = await applyDeaths(deaths, 'day');
-      if (outcome === 'continue') {
-        g.deadline = Math.max(g.deadline || 0, now + 15000);
-        await saveGame();
-      }
+      if (outcome === 'continue') await continueAfterDeaths('day');
     }
     renderRoom();
     return true;
@@ -3991,6 +4426,11 @@ async function resolveExplode(action) {
     kind: 'system',
     text: `${isKing ? '白狼王' : '狼人'} ${pad(seat)} 号自爆${target != null ? `，带走 ${pad(target)} 号` : ''}，今天剩余流程全部跳过，立即进入黑夜`,
   });
+  if (g.sheriff === seat) {
+    g.sheriff = null;
+    g.badgePending = null;
+    g.log.push({ day: g.day, kind: 'system', text: '警长自爆，警徽销毁' });
+  }
   const raw = [{ seat, reason: 'selfboom' }];
   if (target != null) raw.push({ seat: target, reason: 'explode' });
   const deaths = Rules.expandDeaths(raw, {
@@ -4000,7 +4440,124 @@ async function resolveExplode(action) {
     charmTarget: g.charmTarget,
   });
   const outcome = await applyDeaths(deaths, 'day');
-  if (outcome === 'continue') await startNightInternal(false);
+  if (outcome === 'continue') await continueAfterDeaths('night');
+  renderRoom();
+}
+
+async function startSheriffSignup() {
+  g.phase = 'sheriff';
+  g.step = 'policeSignup';
+  g.sheriffCandidates = null;
+  g.policeOrder = null;
+  g.policeIndex = 0;
+  g.runoffSeats = null;
+  g.deadline = Date.now() + DUR.policeSignup;
+  g.log.push({ day: g.day, kind: 'system', text: `警长竞选开始：${Math.round(DUR.policeSignup / 1000)} 秒内选择是否上警，超时按不上警处理` });
+  await saveGame();
+  renderRoom();
+}
+
+async function resolveSheriffSignup(actions) {
+  const run = actions
+    .filter((a) => a.payload?.run && isAliveSeat(a.seat))
+    .map((a) => a.seat)
+    .sort((a, b) => a - b);
+  g.sheriffCandidates = run;
+  if (!run.length) {
+    g.sheriffDone = true;
+    g.log.push({ day: g.day, kind: 'system', text: '没有人上警，本局没有警长' });
+    await startDay();
+    return;
+  }
+  if (run.length === 1) {
+    g.sheriff = run[0];
+    g.sheriffDone = true;
+    g.log.push({ day: g.day, kind: 'system', text: `只有 ${pad(run[0])} 号上警，自动当选警长（投票算 1.5 票，每天决定发言方向）` });
+    await startOrderPhase();
+    return;
+  }
+  g.step = 'policeSpeech';
+  g.policeOrder = run;
+  g.policeIndex = 0;
+  g.deadline = Date.now() + DUR.policeSpeech;
+  g.log.push({ day: g.day, kind: 'system', text: `上警的有 ${run.map(pad).join('、')} 号，按座位顺序发言` });
+  await saveGame();
+  renderRoom();
+}
+
+async function advancePoliceSpeech() {
+  if (g.phase !== 'sheriff' || g.step !== 'policeSpeech') return;
+  const order = g.policeOrder || [];
+  g.policeIndex += 1;
+  while (g.policeIndex < order.length && !isAliveSeat(order[g.policeIndex])) g.policeIndex += 1;
+  if (g.policeIndex >= order.length) {
+    await startPoliceVote();
+    return;
+  }
+  g.deadline = Date.now() + DUR.policeSpeech;
+  await saveGame();
+  renderRoom();
+}
+
+async function startPoliceVote(runoffSeats) {
+  g.phase = 'sheriff';
+  g.step = runoffSeats ? 'policeRunoff' : 'policeVote';
+  if (runoffSeats) g.runoffSeats = runoffSeats;
+  g.deadline = Date.now() + DUR[g.step];
+  g.log.push({
+    day: g.day,
+    kind: 'vote',
+    text: runoffSeats
+      ? `警长 PK：${runoffSeats.map(pad).join('、')} 号平票，警下玩家重新投票（${Math.round(DUR.policeRunoff / 1000)} 秒）`
+      : `警下投票开始（${Math.round(DUR.policeVote / 1000)} 秒），没上警的存活玩家投票，候选人不能投`,
+  });
+  await saveGame();
+  renderRoom();
+}
+
+async function resolvePoliceVote(actions) {
+  const cands = g.step === 'policeRunoff' ? (g.runoffSeats || []) : (g.sheriffCandidates || []);
+  const voters = g.aliveSeats.filter((s) => !cands.includes(s));
+  const rows = actions.filter((a) => voters.includes(a.seat) && cands.includes(a.target));
+  const tally = Rules.tallyVotes(rows);
+  const voteText = rows.map((a) => `${pad(a.seat)}→${pad(a.target)}`).join('、');
+  if (voteText) g.log.push({ day: g.day, kind: 'vote', text: `警下投票：${voteText}` });
+  if (!tally.top.length) {
+    g.sheriff = null;
+    g.sheriffDone = true;
+    g.log.push({ day: g.day, kind: 'system', text: '无人得票，警徽流失，本局没有警长' });
+    await startDay();
+    return;
+  }
+  if (tally.top.length > 1) {
+    if (g.step === 'policeVote') {
+      await startPoliceVote(tally.top);
+      return;
+    }
+    g.sheriff = null;
+    g.sheriffDone = true;
+    g.log.push({ day: g.day, kind: 'system', text: '警下投票再次平票，警徽流失，本局没有警长' });
+    await startDay();
+    return;
+  }
+  const seat = tally.top[0];
+  g.sheriff = seat;
+  g.sheriffDone = true;
+  g.runoffSeats = null;
+  g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号当选警长（${tally.counts[seat]} 票）：投票算 1.5 票，每天从自己开始决定发言方向` });
+  await startOrderPhase();
+}
+
+async function startOrderPhase() {
+  if (g.sheriff == null || !isAliveSeat(g.sheriff) || g.aliveSeats.length <= 1) {
+    await startDay();
+    return;
+  }
+  g.phase = 'order';
+  g.step = 'order';
+  g.deadline = Date.now() + DUR.order;
+  g.log.push({ day: g.day, kind: 'system', text: `警长 ${pad(g.sheriff)} 号选择今天从自己开始顺时针还是逆时针发言` });
+  await saveGame();
   renderRoom();
 }
 
@@ -4023,6 +4580,17 @@ async function resolveVote(actions) {
   }
   const voteText = rows.map((a) => `${pad(a.seat)}→${a.target > 0 ? pad(a.target) : '弃'}`).join('、');
   const tally = Rules.tallyVotes(rows);
+  // 警长投票算 1.5 票
+  if (g.sheriff != null && eligible.includes(g.sheriff)) {
+    const sheriffVote = rows.find((a) => a.seat === g.sheriff && a.target > 0);
+    if (sheriffVote) {
+      tally.counts[sheriffVote.target] = (tally.counts[sheriffVote.target] || 0) + 0.5;
+      let max = 0;
+      Object.values(tally.counts).forEach((n) => { if (n > max) max = n; });
+      tally.max = max;
+      tally.top = max === 0 ? [] : Object.keys(tally.counts).filter((key) => tally.counts[key] === max).map(Number);
+    }
+  }
   g.votes = tally.counts;
   g.voteHistory = g.voteHistory || [];
   g.voteHistory.push({ day: g.day, phase: g.phase, counts: { ...tally.counts } });
@@ -4078,7 +4646,7 @@ async function resolveVote(actions) {
   });
   const outcome = await applyDeaths(deaths, 'day');
   if (outcome !== 'continue') return;
-  await startNightInternal(false);
+  await continueAfterDeaths('night');
 }
 
 async function resolveHunter(actions) {
@@ -4101,7 +4669,8 @@ async function resolveHunter(actions) {
       charmTarget: g.charmTarget,
     });
     const outcome = await applyDeaths(deaths, 'day');
-    if (outcome !== 'continue') return;
+    if (outcome === 'continue') await continueAfterDeaths(from === 'night' ? 'dawn' : 'night');
+    return;
   } else if (reveal) {
     g.log.push({ day: g.day, kind: 'system', text: `${pad(seat)} 号翻开猎人牌，没有开枪` });
     const win = checkWin();
@@ -4111,8 +4680,7 @@ async function resolveHunter(actions) {
     }
   }
 
-  if (from === 'night') await startDawn(false);
-  else await startNightInternal(false);
+  await continueAfterDeaths(from === 'night' ? 'dawn' : 'night');
 }
 
 async function saveGame() {
@@ -4311,16 +4879,32 @@ els.revealBtn.addEventListener('click', () => {
 
 els.chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  if (!g || !isAliveSeat(myRow?.seat)) return;
+  if (!g) return;
   const text = els.chatInput.value.trim();
   if (!text) return;
   const name = profile?.username || session.name || '';
-  if (g.phase === 'night' && isMyWolf()) {
+  if (g.phase === 'night' && isMyWolf() && isAliveSeat(myRow?.seat)) {
     els.chatInput.value = '';
     act('wolfchat', null, { name, text });
     setTimeout(loadChat, 300);
     return;
   }
+  if (g.phase === 'sheriff' && g.step === 'policeSpeech'
+    && (g.policeOrder || [])[g.policeIndex] === myRow?.seat
+    && !submitted.has(`${g.day}:policeSpeech`)) {
+    els.chatInput.value = '';
+    act('chat', null, { name, text });
+    setTimeout(loadChat, 300);
+    return;
+  }
+  if (g.phase === 'lastwords' && g.lastWordsSeat === myRow?.seat
+    && !submitted.has(`${g.day}:lastwords`)) {
+    els.chatInput.value = '';
+    act('chat', null, { name, text });
+    setTimeout(loadChat, 300);
+    return;
+  }
+  if (!isAliveSeat(myRow?.seat)) return;
   if (g.phase !== 'day') return;
   const speaker = currentSpeaker();
   const speechDone = submitted.has(`${g.day}:speech`);
