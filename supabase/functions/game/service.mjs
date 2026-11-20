@@ -99,6 +99,7 @@ export async function dispatch(q, uid, cmd) {
   if (!room && ['snapshot', 'restore', 'spectate'].includes(op)) return { gone: true };
   check(room, '房间不存在');
   let rows = await q(rosterSQL, [code]);
+  const origSeat = new Map(rows.map((p) => [p.id, [p.role, p.seat, p.alive]]));
   let me = rows.find((r) => r.account_id === uid && !r.departed);
   const mode = modeFor(room.options.mode);
   check(mode, '未知板子');
@@ -207,11 +208,18 @@ export async function dispatch(q, uid, cmd) {
   }
   if (g && JSON.stringify(g) !== before) {
     // Includes deals, transformations and deaths in the same commit as the state.
-    for (const p of rows) {
+    // One batched statement instead of a per-player round trip inside the room lock.
+    const sync = rows.filter((p) => {
+      const o = origSeat.get(p.id);
+      return !o || o[0] !== p.role || o[1] !== p.seat || o[2] !== p.alive;
+    });
+    if (sync.length) {
+      const vals = sync.map((_, i) => `($${i * 4 + 1}::uuid,$${i * 4 + 2}::text,$${i * 4 + 3}::int,$${i * 4 + 4}::bool)`).join(',');
       await q(
-        `update public.players set role=$2,seat=$3,alive=$4 where id=$1
-      and (role,seat,alive) is distinct from ($2,$3,$4)`,
-        [p.id, p.role, p.seat, p.alive],
+        `update public.players p set role=v.role,seat=v.seat,alive=v.alive
+        from (values ${vals}) as v(id,role,seat,alive)
+        where p.id=v.id and (p.role,p.seat,p.alive) is distinct from (v.role,v.seat,v.alive)`,
+        sync.flatMap((p) => [p.id, p.role, p.seat, p.alive]),
       );
     }
     if (!wasFinished && g.phase === 'finished') {

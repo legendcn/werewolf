@@ -407,3 +407,81 @@ test('preview serves only frontend assets and rejects invalid paths in the parse
   assert.equal(preview.assetPath('/supabase/functions/game/index.ts'), null);
   assert.throws(() => preview.assetPath('/%'), URIError);
 });
+
+test('optimistic act marks submitted instantly, blocks duplicates, yields polls, rolls back on failure', async (t) => {
+  const { w, run } = await page(t);
+  const mode = MODES.find((m) => m.id === 'std9') || MODES[0];
+  const roster = mode.roles.map((_, i) => ({ id: 'p' + i, name: 'P' + i, is_bot: false, online: true }));
+  const referee = engine({ state: null, roster, mode });
+  referee.start();
+  const wolfSeat = referee.state.teams.wolves[0];
+  const me = roster.find((p) => p.seat === wolfSeat);
+  const target = referee.state.aliveSeats.find((s) => !referee.state.teams.wolves.includes(s));
+  const data = {
+    code: '123456', revision: 1, hostId: roster[0].id,
+    options: { mode: mode.id, g: project(referee.state, me) },
+    me, members: roster.map(({ role, ...r }) => r),
+    channel: 'wolfchat', chat: [], wolfPicks: [], submitted: [],
+  };
+  w.snap = data;
+  run(`profile={id:'${me.id}',status:'approved'}; session={code:'123456',playerId:'${me.id}'};
+    loadRatings=async()=>{}; applySnapshot(snap);`);
+  assert.equal(run('g.step'), 'wolves');
+  let calls = 0;
+  w.bump = () => calls++;
+  run(`roomCommand=(op,args)=>{bump(); return new Promise(res=>{finishAct=()=>res({});});};`);
+  const key = `${data.options.g.day}:wolves`;
+  const pending = run(`act('wolves', ${target})`);
+  assert.equal(run(`optimistic.has('${key}')`), true, 'optimistic mark set before server response');
+  assert.equal(run('acting'), 1);
+  assert.match(w.document.querySelector('#actionArea').textContent, /已选定袭击目标|已提交/);
+  assert.equal(await run(`act('wolves', ${target})`), false, 'duplicate click ignored');
+  assert.equal(calls, 1);
+  run('pollOnce()');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls, 1, 'poll yields to in-flight action');
+  run('finishAct()');
+  assert.equal(await pending, true);
+  assert.equal(run(`optimistic.has('${key}') || acting !== 0`), false);
+  run(`roomCommand=async()=>{throw new Error('网络失败')};`);
+  assert.equal(await run(`act('wolves', ${target})`), false);
+  assert.equal(run(`optimistic.has('${key}')`), false, 'failure rolls back optimistic mark');
+  assert.match(w.document.querySelector('#toast').textContent, /网络失败/);
+});
+
+test('unchanged snapshots skip DOM rebuilds; poll cadence adapts to recent activity', async (t) => {
+  const { w, run } = await page(t);
+  const mode = MODES[0];
+  const roster = mode.roles.map((_, i) => ({ id: 'p' + i, name: 'P' + i, is_bot: false, online: true }));
+  const referee = engine({ state: null, roster, mode });
+  referee.start();
+  const me = roster[0];
+  const data = {
+    code: '123456', revision: 1, hostId: me.id,
+    options: { mode: mode.id, g: project(referee.state, me) },
+    me, members: roster.map(({ role, ...r }) => r),
+    channel: 'chat', chat: [{ day: 1, payload: { name: 'P1', text: '你好' } }], wolfPicks: [], submitted: [],
+  };
+  w.snap = data;
+  run(`session={code:'123456',playerId:'p0'}; loadRatings=async()=>{}; applySnapshot(snap);
+    let rebuilds=0, chatBuilds=0;
+    const seatOrig=els.playerList.replaceChildren.bind(els.playerList);
+    els.playerList.replaceChildren=(...a)=>{rebuilds++;return seatOrig(...a);};
+    const chatOrig=els.chatFeed.replaceChildren.bind(els.chatFeed);
+    els.chatFeed.replaceChildren=(...a)=>{chatBuilds++;return chatOrig(...a);};
+    renderRoom(); renderChat();`);
+  assert.equal(run('rebuilds'), 0, 'identical state does not rebuild seats');
+  assert.equal(run('chatBuilds'), 0, 'identical chat does not rebuild feed');
+  w.next = structuredClone(data);
+  w.next.revision = 2;
+  w.next.options.g.phase = 'day';
+  w.next.options.g.step = 'day';
+  w.next.chat = [...data.chat, { day: 1, payload: { name: 'P2', text: '新消息' } }];
+  run('applySnapshot(next);');
+  assert.equal(run('chatBuilds'), 1, 'new chat message renders');
+  assert.equal(run('lastChangeAt > 0'), true);
+  assert.equal(run('lastChangeAt=Date.now(); nextPollDelay()'), 1200);
+  assert.equal(run('lastChangeAt=Date.now()-9000; nextPollDelay()'), 2500);
+  run(`session=null;`);
+  assert.equal(run('nextPollDelay()'), 3000);
+});

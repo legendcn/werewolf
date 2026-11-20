@@ -1,5 +1,6 @@
 // Authenticated game commands. Raw roles, action rows and authoritative state
 // never travel over the browser's Supabase table/realtime clients.
+let acting = 0; // in-flight action requests; polls yield to them to avoid lock contention
 async function gameRequest(op, code, args = {}) {
   const epoch = authEpoch;
   const accountId = profile?.id;
@@ -171,7 +172,7 @@ async function roomCommand(op, args) {
   else applySnapshot(data);
 }
 async function pollOnce() {
-  if (!session || document.hidden || polling) return;
+  if (!session || document.hidden || polling || acting) return;
   const active = polling = session;
   try {
     if (++pollTick % 8 === 0) refreshProfileQuiet().catch(() => {});
@@ -212,12 +213,27 @@ async function kickMember(member) {
 }
 async function act(step, target, payload = {}) {
   if (!g) return false;
+  // 乐观反馈：非聊天行动点击立即显示「已提交」，不等服务端往返；失败再回退。
+  const key = `${g.day}:${step}`;
+  const optimisticOk = step !== 'chat' && step !== 'wolfchat';
+  if (optimisticOk) {
+    if (optimistic.has(key)) return false;
+    optimistic.add(key);
+    renderRoom();
+  }
+  acting++;
   try {
     await roomCommand('act', { matchId: g.matchId, day: g.day, step, target: target ?? null, payload });
     return true;
   } catch (e) {
     toast(friendlyError(e));
     return false;
+  } finally {
+    acting--;
+    if (optimisticOk) {
+      optimistic.delete(key);
+      renderRoom();
+    }
   }
 }
 async function spectateLoad() {

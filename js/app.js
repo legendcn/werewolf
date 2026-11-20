@@ -211,6 +211,12 @@ let ratings = new Map();
 let ratingsKey = '';
 let leaderboardData = [];
 let submitted = new Set();
+// 乐观提交：点击立即本地标记「已提交」，不等服务端往返；响应后由 submitted 接管。
+const optimistic = new Set();
+function isSubmitted(key) { return submitted.has(key) || optimistic.has(key); }
+let roomSig = '';
+let chatSig = '';
+let lastChangeAt = 0;
 let pick = null;
 let kickAsked = null;
 let appointId = null;
@@ -910,6 +916,9 @@ function enterRoom(nextSession) {
   ratings = new Map();
   ratingsKey = '';
   submitted = new Set();
+  optimistic.clear();
+  roomSig = '';
+  chatSig = '';
   pick = null;
   preFlushing = false;
   preFailedAt = 0;
@@ -944,12 +953,25 @@ function resetRoomView() {
 
 function startPolling() {
   stopPolling();
-  pollTimer = setInterval(pollOnce, 1600);
+  // 首帧同步由 enterRoom 的 pollOnce 负责；轮询按间隔起步，避免与在途请求抢响应。
+  schedulePoll(1600);
+}
+// 自适应轮询：刚有变化时跟得紧，长时间无变化时放宽，降低服务端锁竞争。
+function nextPollDelay() {
+  if (!session || document.hidden) return 3000;
+  return Date.now() - lastChangeAt < 8000 ? 1200 : 2500;
+}
+function schedulePoll(delay) {
+  stopPolling();
+  pollTimer = setTimeout(async () => {
+    await pollOnce();
+    if (session) schedulePoll(nextPollDelay());
+  }, delay);
 }
 
 function stopPolling() {
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
   }
 }
@@ -1707,7 +1729,7 @@ async function flushPreSpeech() {
   if (preFlushing || !g || g.phase !== 'day') return;
   if (!preSpeech.msgs.length || preSpeech.day !== g.day) return;
   if (currentSpeaker() !== myRow?.seat) return;
-  if (submitted.has(`${g.day}:speech`)) return;
+  if (isSubmitted(`${g.day}:speech`)) return;
   if (Date.now() - preFailedAt < 5000) return;
   preFlushing = true;
   const active = session;
@@ -1736,6 +1758,9 @@ async function flushPreSpeech() {
 
 function renderChat() {
   const rows = g?.phase === 'night' ? wolfChatRows : chatRows;
+  const sig = JSON.stringify([rows, g?.phase === 'day' ? preSpeech.msgs : null]);
+  if (sig === chatSig) return;
+  chatSig = sig;
   const frag = document.createDocumentFragment();
   rows.forEach((row) => {
     const wrap = document.createElement('div');
@@ -1767,11 +1792,19 @@ function renderChat() {
   els.chatFeed.scrollTop = els.chatFeed.scrollHeight;
 }
 
+function roomSignature() {
+  return JSON.stringify([g, members, [...submitted], [...optimistic], wolfPicks,
+    pick, kickAsked, appointId, roleShown, room?.appointments, preSpeech.msgs, localFeed.length]);
+}
 function renderRoom() {
   if (g && myRow?.seat != null && (g.kicked || []).includes(myRow.seat)) {
     exitRoomLocal('你已被站长请出房间');
     return;
   }
+  // 状态未变不重绘：轮询多数时候快照相同，避免整片 DOM 重建带来的卡顿与滚动跳动。
+  const sig = roomSignature();
+  if (sig === roomSig) return;
+  lastChangeAt = Date.now();
   const mode = currentMode();
   const total = mode.roles.length;
   const inGame = Boolean(g);
@@ -1802,6 +1835,8 @@ function renderRoom() {
   renderFeed();
   updateChatForm();
   updateClock();
+  // 渲染期间可能初始化 pick 等交互状态，按渲染后的状态记录签名，避免下次轮询多重建一次。
+  roomSig = roomSignature();
 }
 
 function phaseText() {
@@ -1884,7 +1919,7 @@ function renderStatusPrompt(mode, inGame) {
       const offline = isSeatOnline(speaker) ? '' : '，对方离线，将自动跳过';
       let hint;
       if (speaker === myRow?.seat) {
-        hint = submitted.has(`${g.day}:speech`)
+        hint = isSubmitted(`${g.day}:speech`)
           ? '，你已结束发言，等待下一位'
           : '，轮到你发言，可连发多条，说完点「结束发言」';
       } else if (canPreInput()) {
@@ -2151,7 +2186,7 @@ function pickButtons(onConfirm) {
 }
 
 function submittedHelp(step) {
-  return submitted.has(`${g.day}:${step}`);
+  return isSubmitted(`${g.day}:${step}`);
 }
 
 function renderActionPanel(mode, inGame) {
@@ -2772,14 +2807,14 @@ function updateChatForm() {
   const speaker = currentSpeaker();
   if (g && preSpeech.msgs.length && (preSpeech.day !== g.day || preSpeech.matchId !== g.matchId)) clearPreSpeech();
   const wolfNight = Boolean(g) && g.phase === 'night' && isMyWolf() && alive;
-  const speechDone = Boolean(g) && submitted.has(`${g.day}:speech`);
+  const speechDone = Boolean(g) && isSubmitted(`${g.day}:speech`);
   const myTurn = Boolean(g) && g.phase === 'day' && alive && speaker === myRow?.seat && !speechDone;
   const preTurn = Boolean(g) && g.phase === 'day' && alive && !myTurn && !speechDone && canPreInput();
   const policeTurn = Boolean(g) && g.phase === 'sheriff' && g.step === 'policeSpeech'
     && (g.policeOrder || [])[g.policeIndex] === myRow?.seat
-    && !submitted.has(`${g.day}:policeSpeech`);
+    && !isSubmitted(`${g.day}:policeSpeech`);
   const lastTurn = Boolean(g) && g.phase === 'lastwords' && g.lastWordsSeat === myRow?.seat
-    && !submitted.has(`${g.day}:lastwords`);
+    && !isSubmitted(`${g.day}:lastwords`);
   const canChat = wolfNight || myTurn || preTurn || policeTurn || lastTurn;
   const pending = myTurn ? pendingSpeechCount() : 0;
   const submitBtn = els.chatForm.querySelector('button[type="submit"]');
@@ -2951,7 +2986,7 @@ els.chatForm.addEventListener('submit', (event) => {
   }
   if (g.phase !== 'day') return;
   const speaker = currentSpeaker();
-  const speechDone = submitted.has(`${g.day}:speech`);
+  const speechDone = isSubmitted(`${g.day}:speech`);
   if (speaker === myRow?.seat && !speechDone) {
     els.chatInput.value = '';
     act('chat', null, { text });
