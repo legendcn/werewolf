@@ -152,6 +152,7 @@ const els = {
   revealBody: document.querySelector('#revealBody'),
   replayBtn: document.querySelector('#replayBtn'),
   watchReplayBtn: document.querySelector('#watchReplayBtn'),
+  saveReplayBtn: document.querySelector('#saveReplayBtn'),
   leaveBtn: document.querySelector('#leaveRoom'),
   spectateBtn: document.querySelector('#spectateBtn'),
   spectateView: document.querySelector('#spectateView'),
@@ -159,6 +160,7 @@ const els = {
   spectateExit: document.querySelector('#spectateExit'),
   spectateReplayBtn: document.querySelector('#spectateReplayBtn'),
   spectateStatusBar: document.querySelector('#spectateStatusBar'),
+  spectateNote: document.querySelector('#spectateNote'),
   spectatePhase: document.querySelector('#spectatePhase'),
   spectateClock: document.querySelector('#spectateClock'),
   spectateCount: document.querySelector('#spectateCount'),
@@ -232,6 +234,9 @@ let spectateBusy = false;
 let replayData = null;
 let replayFilter = 'all';
 let historyRows = [];
+let historyError = '';
+let historyLoading = false;
+let spectateFailures = 0;
 
 let toastTimer;
 function toast(message) {
@@ -283,6 +288,9 @@ function closeAuthModal() {
 }
 
 function showRoom() {
+  stopSpectate();
+  spectate = null;
+  setSpectateNote('');
   els.homeView.hidden = true;
   els.roomView.hidden = false;
   els.spectateView.hidden = true;
@@ -297,6 +305,7 @@ function showHome() {
   els.replayView.hidden = true;
   stopSpectate();
   spectate = null;
+  setSpectateNote('');
   closeAccountMenu();
   updateHomeRoomCard();
   if (client && accountApproved()) {
@@ -1289,24 +1298,53 @@ function formatWhen(iso) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
-async function loadHistory() {
-  if (!client || !accountApproved()) return;
-  els.historyNote.textContent = '加载中…';
-  const { data, error } = await client
-    .from('replays')
-    .select('id, room_code, mode_name, winner, days, finished_at')
-    .order('finished_at', { ascending: false })
-    .limit(20);
-  if (error) {
-    historyRows = [];
-    renderHistory(true);
-    return;
+function historyHint(message) {
+  if (/permission denied|42501/i.test(message)) {
+    return '没有权限读取回放：请在 Supabase SQL Editor 运行 supabase/migration-v8.sql';
   }
-  historyRows = data || [];
+  if (/does not exist|PGRST205|42P01|Could not find the table|schema cache/i.test(message)) {
+    return '历史回放表还没建好：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
+  }
+  if (/fetch|network|Load failed|Failed to fetch|timeout/i.test(message)) {
+    return '网络连不上服务器：检查加速器后点「刷新」重试';
+  }
+  if (/JWT|401|Invalid token|not authenticated|session/i.test(message)) {
+    return '登录状态过期：请退出登录再重新登录';
+  }
+  return `历史读取失败：${message}`;
+}
+
+async function loadHistory(attempt = 0) {
+  if (!client || !accountApproved()) return;
+  if (historyLoading) return;
+  historyLoading = true;
+  if (!historyRows.length) els.historyNote.textContent = '加载中…';
+  let failure = null;
+  try {
+    const { data, error } = await client
+      .from('replays')
+      .select('id, room_code, mode_name, winner, days, finished_at')
+      .order('finished_at', { ascending: false })
+      .limit(20);
+    if (error) throw error;
+    historyRows = data || [];
+    historyError = '';
+    renderHistory();
+  } catch (error) {
+    failure = error;
+  } finally {
+    historyLoading = false;
+  }
+  if (!failure) return;
+  if (attempt < 2) {
+    await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
+    return loadHistory(attempt + 1);
+  }
+  historyError = String(failure?.message || failure || '未知错误');
   renderHistory();
 }
 
-function renderHistory(failed = false) {
+function renderHistory() {
   const frag = document.createDocumentFragment();
   const emptyRow = (text) => {
     const tr = document.createElement('tr');
@@ -1317,9 +1355,13 @@ function renderHistory(failed = false) {
     tr.append(td);
     return tr;
   };
-  if (failed) {
-    els.historyNote.textContent = '还没有回放表：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
-    frag.append(emptyRow('历史对局暂不可用'));
+  els.historyNote.className = historyError
+    ? (historyRows.length ? 'text-muted' : 'text-danger')
+    : 'text-muted';
+  if (historyError && !historyRows.length) {
+    els.historyNote.className = 'text-danger';
+    els.historyNote.textContent = historyHint(historyError);
+    frag.append(emptyRow('历史对局读取失败'));
     els.historyBody.replaceChildren(frag);
     return;
   }
@@ -1330,6 +1372,12 @@ function renderHistory(failed = false) {
     return;
   }
   els.historyNote.textContent = `最近 ${historyRows.length} 局 · 回放包含全部发言和狼人夜间讨论`;
+  if (historyError) {
+    const note = document.createElement('span');
+    note.className = 'text-danger d-block';
+    note.textContent = `刷新失败（显示的是上次结果）：${historyHint(historyError)}`;
+    els.historyNote.append(note);
+  }
   historyRows.forEach((row) => {
     const tr = document.createElement('tr');
     const when = document.createElement('td');
@@ -1583,8 +1631,9 @@ function renderReplayTimeline() {
 // ---------- 旁观进行中的对局 ----------
 async function openSpectate(code) {
   if (!guardClient()) return;
-  if (session) {
-    toast('你正在房间里，先点「离开房间」再旁观别的对局');
+  if (session && session.code === code) {
+    toast('这就是你当前的房间，直接返回对局吧');
+    backToRoom();
     return;
   }
   if (!accountApproved()) {
@@ -1612,13 +1661,14 @@ async function openSpectate(code) {
     await spectateLoad();
     startSpectatePoll();
   } catch (error) {
+    spectateBusy = false;
     toast(friendlyError(error));
     stopSpectate();
     spectate = null;
     showHome();
-  } finally {
-    spectateBusy = false;
+    return;
   }
+  spectateBusy = false;
 }
 
 async function spectateLoad() {
@@ -1659,10 +1709,33 @@ async function spectateLoad() {
   renderSpectate();
 }
 
+function setSpectateNote(text) {
+  if (!els.spectateNote) return;
+  els.spectateNote.textContent = text || '';
+  els.spectateNote.hidden = !text;
+}
+
 function startSpectatePoll() {
   stopSpectate();
+  spectateFailures = 0;
+  setSpectateNote('');
   spectateTimer = setInterval(() => {
-    spectateLoad().catch(() => {});
+    spectateLoad().then(() => {
+      if (!spectate) return;
+      if (spectateFailures) {
+        spectateFailures = 0;
+        setSpectateNote('');
+      }
+    }).catch((error) => {
+      if (!spectate) return;
+      spectateFailures += 1;
+      const reason = friendlyError(error);
+      setSpectateNote(`旁观刷新失败（自动重试中）：${reason}`);
+      if (spectateFailures >= 5) {
+        stopSpectate();
+        setSpectateNote(`旁观刷新失败，已暂停：${reason}。可以点「返回大厅」后重新进入`);
+      }
+    });
   }, 2000);
 }
 
@@ -2817,6 +2890,7 @@ function renderGameOver() {
   els.gameOverCard.hidden = !show;
   els.replayBtn.hidden = !(show && isHost());
   els.watchReplayBtn.hidden = !show;
+  els.saveReplayBtn.hidden = !(show && isHost() && g.replayError && !g.replaySaved);
   if (!show) return;
 
   const winner = g.winner;
@@ -3760,6 +3834,7 @@ async function saveReplay() {
     });
     if (insertError) throw insertError;
     g.replaySaved = true;
+    g.replayError = null;
   } catch (error) {
     g.replayError = friendlyError(error);
   }
@@ -4153,7 +4228,16 @@ function friendlyError(error) {
     return '数据库还没升级：先在 Supabase SQL Editor 运行 supabase/migration-v6.sql';
   }
   if (/replays/i.test(message)) {
-    return '历史回放表还没建好：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
+    if (/permission denied|42501|row-level security/i.test(message)) {
+      return '没有权限读写历史回放：请在 Supabase SQL Editor 运行 supabase/migration-v8.sql';
+    }
+    if (/does not exist|PGRST205|42P01|schema cache|Could not find/i.test(message)) {
+      return '历史回放表还没建好：先在 Supabase SQL Editor 运行 supabase/migration-v7.sql';
+    }
+    return `历史回放操作失败：${message}`;
+  }
+  if (/JWT|Invalid token|not authenticated|401/i.test(message)) {
+    return '登录状态过期：请退出登录后重新登录';
   }
   if (/profiles|username_taken/i.test(message)) {
     return '账号系统还没建好，先在 Supabase SQL Editor 运行 supabase/migration-v5.sql';
@@ -4269,6 +4353,17 @@ els.replayBtn.addEventListener('click', () => {
 
 els.watchReplayBtn.addEventListener('click', () => {
   if (session) openLatestReplay(session.code).catch((error) => toast(friendlyError(error)));
+});
+
+els.saveReplayBtn.addEventListener('click', async () => {
+  if (!g || !isHost() || g.replaySaved) return;
+  els.saveReplayBtn.disabled = true;
+  g.replayError = null;
+  await saveReplay();
+  await saveGame();
+  els.saveReplayBtn.disabled = false;
+  renderGameOver();
+  toast(g.replayError ? `回放仍未保存：${g.replayError}` : '回放已保存，刷新首页就能在「历史对局」里看到');
 });
 
 els.spectateBtn.addEventListener('click', () => {

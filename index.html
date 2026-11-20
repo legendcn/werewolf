@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.14.0">
+  <link rel="stylesheet" href="styles.css?v=0.15.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -263,6 +263,7 @@
               <div class="mt-3">
                 <button id="replayBtn" class="btn btn-danger" type="button" hidden>再来一局（房主）</button>
                 <button id="watchReplayBtn" class="btn btn-outline-dark ml-2" type="button">查看本局回放</button>
+                <button id="saveReplayBtn" class="btn btn-outline-secondary ml-2" type="button" hidden>重新保存回放</button>
               </div>
             </div>
           </div>
@@ -316,6 +317,7 @@
         </div>
         <div class="sr-prompt" id="spectatePrompt"></div>
       </div>
+      <div class="small text-danger mb-2" id="spectateNote" hidden></div>
 
       <p class="small text-muted">旁观只显示公开信息：座位、白天发言、投票结果和流程记录；身份与狼人夜间讨论要等本局结束后在「历史对局」查看。</p>
 
@@ -396,7 +398,7 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.14.0 · 60 秒发言 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 旁观 / 历史回放 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.15.0 · 历史对局/旁观修复 · 60 秒发言 / 提前打字 / 狼人自爆 / 站长踢人 / 封禁与解封 / 人机 / 旁观 / 历史回放 / 账号登录 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="authModal" class="sr-modal" hidden>
@@ -463,9 +465,9 @@
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.14.0"></script>
-  <script src="js/modes.js?v=0.14.0"></script>
-  <script src="js/rules.js?v=0.14.0"></script>
-  <script src="js/app.js?v=0.14.0"></script>
+  <script src="js/config.js?v=0.15.0"></script>
+  <script src="js/modes.js?v=0.15.0"></script>
+  <script src="js/rules.js?v=0.15.0"></script>
+  <script src="js/app.js?v=0.15.0"></script>
 </body>
 </html>
