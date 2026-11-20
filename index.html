@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>狼人杀 · 在线版</title>
   <link rel="stylesheet" href="vendor/bootstrap.min.css?v=4.6.2">
-  <link rel="stylesheet" href="styles.css?v=0.8.2">
+  <link rel="stylesheet" href="styles.css?v=0.9.0">
 </head>
 <body>
   <nav class="navbar navbar-light bg-light mb-4">
@@ -78,6 +78,16 @@
             <div id="accountNote" class="small text-muted mt-1"></div>
           </div>
           <p id="authStatus" class="small text-muted mb-0 mt-3" hidden></p>
+        </div>
+      </div>
+
+      <div class="card mb-4" id="activeRoomCard" hidden>
+        <div class="card-body d-flex flex-wrap align-items-center">
+          <div class="mr-auto">
+            <strong>当前对局：房间 <span id="activeRoomCode" class="sr-code">------</span></strong>
+            <div id="activeRoomNote" class="small text-muted mt-1">对局还在进行，审核完点「返回对局」即可继续。</div>
+          </div>
+          <button id="backToRoomBtn" class="btn btn-danger" type="button">返回对局</button>
         </div>
       </div>
 
@@ -202,6 +212,7 @@
         <h1 class="h3 mb-0">狼人杀 · 房间 <span id="roomCodeLabel" class="sr-code">------</span></h1>
         <div class="mt-2 mt-sm-0">
           <button id="copyCode" class="btn btn-sm btn-outline-secondary" type="button">复制房间码</button>
+          <button id="lobbyBtn" class="btn btn-sm btn-outline-primary ml-2" type="button" hidden>账号管理</button>
           <button id="leaveRoom" class="btn btn-sm btn-outline-danger ml-2" type="button">离开房间</button>
         </div>
       </div>
@@ -297,15 +308,15 @@
   </main>
 
   <footer class="sr-footer container">
-    v0.8.2 · 账号登录 / 站长审核 / 狼人夜聊 / 顺序发言 / 掉线自动跳过 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
+    v0.9.0 · 账号登录 / 站长审核 / 边玩边审核 / 狼人夜聊 / 顺序发言 / 掉线自动跳过 / Elo · <a href="https://github.com/legendcn/werewolf">GitHub 仓库</a>
   </footer>
 
   <div id="toast" class="sr-toast" role="status" hidden></div>
 
   <script src="vendor/supabase.js"></script>
-  <script src="js/config.js?v=0.8.2"></script>
-  <script src="js/modes.js?v=0.8.2"></script>
-  <script src="js/rules.js?v=0.8.2"></script>
-  <script src="js/app.js?v=0.8.2"></script>
+  <script src="js/config.js?v=0.9.0"></script>
+  <script src="js/modes.js?v=0.9.0"></script>
+  <script src="js/rules.js?v=0.9.0"></script>
+  <script src="js/app.js?v=0.9.0"></script>
 </body>
 </html>

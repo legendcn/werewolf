@@ -74,6 +74,11 @@ const els = {
   authStatus: document.querySelector('#authStatus'),
   logoutBtn: document.querySelector('#logoutBtn'),
   refreshStatusBtn: document.querySelector('#refreshStatus'),
+  activeRoomCard: document.querySelector('#activeRoomCard'),
+  activeRoomCode: document.querySelector('#activeRoomCode'),
+  activeRoomNote: document.querySelector('#activeRoomNote'),
+  backToRoomBtn: document.querySelector('#backToRoomBtn'),
+  lobbyBtn: document.querySelector('#lobbyBtn'),
   pendingCard: document.querySelector('#pendingCard'),
   pendingTitle: document.querySelector('#pendingTitle'),
   pendingText: document.querySelector('#pendingText'),
@@ -218,7 +223,31 @@ function showRoom() {
 function showHome() {
   els.roomView.hidden = true;
   els.homeView.hidden = false;
+  updateHomeRoomCard();
   if (client && accountApproved()) loadLeaderboard();
+}
+
+function updateHomeRoomCard() {
+  const inRoom = Boolean(session);
+  const approved = accountApproved();
+  els.startCard.hidden = !approved || inRoom;
+  els.activeRoomCard.hidden = !(approved && inRoom);
+  els.heroStart.textContent = inRoom ? '返回当前对局' : '开始游戏';
+  const navStart = document.querySelector('.navbar a[href="#start"]');
+  if (navStart) navStart.textContent = inRoom ? '当前对局' : '开始游戏';
+  els.lobbyBtn.hidden = !(inRoom && isAdminAccount());
+  if (!inRoom) return;
+  els.activeRoomCode.textContent = session.code;
+  els.activeRoomNote.textContent = isHost()
+    ? '你是房主，对局引擎会在后台继续运行；审核完点「返回对局」即可继续。'
+    : '对局还在进行，审核完点「返回对局」即可继续。';
+}
+
+function backToRoom() {
+  if (!session) return;
+  showRoom();
+  renderRoom();
+  window.scrollTo(0, 0);
 }
 
 function readName() {
@@ -307,7 +336,6 @@ function applyAccountUI() {
   els.authForms.hidden = has;
   els.accountBar.hidden = !has;
   els.pendingCard.hidden = true;
-  els.startCard.hidden = !approved;
   els.leaderboardCard.hidden = !approved;
   els.adminCard.hidden = !(approved && isAdminAccount());
   els.createBtn.disabled = busy || !approved;
@@ -315,6 +343,7 @@ function applyAccountUI() {
   if (!has) {
     els.nameInput.value = '';
     els.accountNote.textContent = '';
+    updateHomeRoomCard();
     return;
   }
   els.accountName.textContent = profile.username;
@@ -326,8 +355,10 @@ function applyAccountUI() {
     : profile.status === 'rejected' ? '账号未通过审核' : '账号待审核';
   if (approved) {
     els.nameInput.value = profile.username;
+    updateHomeRoomCard();
     return;
   }
+  updateHomeRoomCard();
   els.pendingCard.hidden = false;
   els.pendingTitle.textContent = profile.status === 'rejected' ? '审核未通过' : '等待审核';
   els.pendingText.textContent = profile.status === 'rejected'
@@ -718,6 +749,7 @@ function enterRoom(nextSession) {
   feedSeeded = false;
   resetRoomView();
   showRoom();
+  updateHomeRoomCard();
   setConn('连接中…');
   loadRoom();
   loadMembers();
@@ -2758,6 +2790,10 @@ els.modeSelect.addEventListener('change', updateModeHint);
 
 document.querySelector('#heroStart').addEventListener('click', (event) => {
   event.preventDefault();
+  if (session) {
+    backToRoom();
+    return;
+  }
   if (!accountApproved()) {
     els.authCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     els.loginName.focus({ preventScroll: true });
@@ -2768,9 +2804,24 @@ document.querySelector('#heroStart').addEventListener('click', (event) => {
 });
 
 document.querySelector('.navbar a[href="#start"]').addEventListener('click', (event) => {
-  if (accountApproved()) return;
   event.preventDefault();
-  els.authCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (session) {
+    backToRoom();
+    return;
+  }
+  if (!accountApproved()) {
+    els.authCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  els.startCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+els.backToRoomBtn.addEventListener('click', backToRoom);
+
+els.lobbyBtn.addEventListener('click', () => {
+  showHome();
+  if (isAdminAccount()) loadAdmin();
+  els.adminCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
 els.authCard.querySelectorAll('[data-auth-tab]').forEach((btn) => {
@@ -2891,6 +2942,10 @@ els.adminRefresh.addEventListener('click', () => {
 
 els.logoutBtn.addEventListener('click', async () => {
   if (authBusy) return;
+  if (session) {
+    toast('对局进行中，先点「返回对局」继续；要退出请先结束或离开房间');
+    return;
+  }
   authBusy = true;
   try {
     stopPendingPoll();
